@@ -284,6 +284,33 @@ class DrawingUtilities:
         return DrawingUtilities.dim_offset_from_axes(ax, AppConstants.PRESET_DIM_LABEL_GAP_PX)
 
 
+# Central capability map — single source of truth for all shape feature sets.
+# Edit here; all frozensets in SmartGeometryEngine and GeometricRotation are derived.
+#   polygon:       has polygon vertices (used by SmartGeometryEngine.POLYGON_SHAPES)
+#   geometric_2d:  2D shape using post-draw artist transform pipeline
+#   geometric_3d:  3D shape using post-draw artist transform pipeline
+#   arc_symmetric: radially symmetric — flip normalises to base_side rotation
+SHAPE_CAPABILITIES: dict[str, dict[str, bool]] = {
+    # 2D shapes
+    "Rectangle":         {"polygon": True,  "geometric_2d": True,  "geometric_3d": False, "arc_symmetric": False},
+    "Square":            {"polygon": True,  "geometric_2d": False, "geometric_3d": False, "arc_symmetric": False},
+    "Parallelogram":     {"polygon": True,  "geometric_2d": True,  "geometric_3d": False, "arc_symmetric": False},
+    "Trapezoid":         {"polygon": True,  "geometric_2d": True,  "geometric_3d": False, "arc_symmetric": False},
+    "Triangle":          {"polygon": True,  "geometric_2d": True,  "geometric_3d": False, "arc_symmetric": False},
+    "Polygon":           {"polygon": True,  "geometric_2d": False, "geometric_3d": False, "arc_symmetric": False},
+    "Tri Triangle":      {"polygon": False, "geometric_2d": True,  "geometric_3d": False, "arc_symmetric": False},
+    # Radially symmetric 2D/3D
+    "Sphere":            {"polygon": False, "geometric_2d": False, "geometric_3d": False, "arc_symmetric": True},
+    # 3D shapes
+    "Hemisphere":        {"polygon": False, "geometric_2d": False, "geometric_3d": True,  "arc_symmetric": True},
+    "Cylinder":          {"polygon": False, "geometric_2d": False, "geometric_3d": True,  "arc_symmetric": True},
+    "Cone":              {"polygon": False, "geometric_2d": False, "geometric_3d": True,  "arc_symmetric": True},
+    "Rectangular Prism": {"polygon": False, "geometric_2d": False, "geometric_3d": True,  "arc_symmetric": False},
+    "Triangular Prism":  {"polygon": False, "geometric_2d": False, "geometric_3d": True,  "arc_symmetric": False},
+    "Tri Prism":         {"polygon": False, "geometric_2d": False, "geometric_3d": True,  "arc_symmetric": False},
+}
+
+
 class SmartGeometryEngine:
     """Detects congruent sides and right angles for smart hashmark/marker drawing."""
 
@@ -291,11 +318,10 @@ class SmartGeometryEngine:
     TOL_ANGLE = 0.1       # Degrees tolerance for right angle detection
 
     # Shapes that have meaningful polygon vertices to analyze
-    POLYGON_SHAPES = frozenset([
-        "Rectangle", "Square", "Parallelogram", "Trapezoid",
-        "Triangle",
-        "Polygon",
-    ])
+    # Derived from SHAPE_CAPABILITIES — do not edit directly.
+    POLYGON_SHAPES = frozenset(
+        name for name, caps in SHAPE_CAPABILITIES.items() if caps["polygon"]
+    )
 
     @staticmethod
     def _side_lengths(points: "Polygon") -> list[float]:
@@ -440,7 +466,7 @@ class PolygonType(Enum):
 
 class AppConstants:
     # UI Settings
-    WINDOW_TITLE: str = "Geometry Forge 4.8"
+    WINDOW_TITLE: str = "Geometry Forge"
     
     DEFAULT_FONT_SIZE: int = 12
     MIN_FONT_SIZE: int = 6
@@ -895,45 +921,20 @@ class GeometricRotation:
     transformed for those.
     """
     
+    # Derived from SHAPE_CAPABILITIES — do not edit directly.
     # 2D polygon shapes where annotations should follow geometric rotation.
-    # These all use rotate_polygon_to_base or equivalent vertex reordering
-    # that rotates CW for direction=1.  Polygon is excluded (no ROTATE
-    # feature, centered at origin, uses additive angle offset instead).
-    GEOMETRIC_SHAPES: frozenset[str] = frozenset({
-        "Rectangle", "Triangle", "Parallelogram", "Trapezoid",
-        "Tri Triangle",  # composite-only 4-step triangle
-    })
-    
-    # 3D shapes that use flat geometric rotation of the entire drawing
-    # instead of per-orientation redrawing.  The drawer always draws at
-    # base_side=0 (canonical), then rotate_axes_artists rotates all
-    # matplotlib artists by the appropriate angle.
-    GEOMETRIC_3D_SHAPES: frozenset[str] = frozenset({
-        "Hemisphere", "Cylinder", "Cone", "Rectangular Prism",
-        "Triangular Prism", "Tri Prism",
-    })
-
-    # Shapes whose geometry is purely Arc-based and radially symmetric around
-    # their rotation axis.  For these, flip_h / flip_v is always equivalent to
-    # a pure base_side step, so we can safely normalise the stored flip flags
-    # into base_side before calling transform_artist_lists.  This avoids the
-    # two-pass (rotate-then-flip) Arc angle bug (B30) where a flip applied
-    # AFTER rotation produces the wrong theta/angle combination on Arc patches.
-    ARC_SYMMETRIC_SHAPES: frozenset[str] = frozenset({
-        "Hemisphere", "Cylinder", "Cone", "Sphere",
-    })
-    
-    # Unified set: ALL shapes that use the post-draw artist transform pipeline.
-    # Both 2D and 3D shapes are drawn at canonical orientation (base_side=0,
-    # no flip), then rotate_axes_artists + flip_axes_artists transform all
-    # matplotlib artists.  This ensures rotation and flip behave identically
-    # for standalone and composite shapes — everything moves as a unit.
-    ALL_GEOMETRIC_SHAPES: frozenset[str] = frozenset(
-        # Note: bare class-body names (GEOMETRIC_SHAPES, GEOMETRIC_3D_SHAPES) are
-        # valid here — Python evaluates the class body top-to-bottom so both sets
-        # are already defined by this point.
-        GEOMETRIC_SHAPES | GEOMETRIC_3D_SHAPES
+    GEOMETRIC_SHAPES: frozenset[str] = frozenset(
+        name for name, caps in SHAPE_CAPABILITIES.items() if caps["geometric_2d"]
     )
+    # 3D shapes using the post-draw artist transform pipeline.
+    GEOMETRIC_3D_SHAPES: frozenset[str] = frozenset(
+        name for name, caps in SHAPE_CAPABILITIES.items() if caps["geometric_3d"]
+    )
+    # Arc-based radially symmetric shapes — flip normalises to base_side.
+    ARC_SYMMETRIC_SHAPES: frozenset[str] = frozenset(
+        name for name, caps in SHAPE_CAPABILITIES.items() if caps["arc_symmetric"]
+    )
+    # ALL_GEOMETRIC_SHAPES is defined at module level after this class (see [5b]).
     
     # Map of shape name → geometry_hints key that stores display vertices.
     _VERTEX_HINT_KEYS: dict[str, str] = {
@@ -1449,6 +1450,13 @@ class GeometricRotation:
             except Exception:
                 logger.debug("Could not flip artist %s", cls_name)
 
+
+
+# [5b] Module-level constant — evaluated after GeometricRotation is fully defined,
+# eliminating class-body evaluation-order risk for the union of 2D + 3D sets.
+GeometricRotation.ALL_GEOMETRIC_SHAPES = (
+    GeometricRotation.GEOMETRIC_SHAPES | GeometricRotation.GEOMETRIC_3D_SHAPES
+)
 
 
 @dataclass
@@ -11050,7 +11058,6 @@ if __name__ == "__main__":
 
 # ================== GEOMETRY FORGE - TASK TRACKER ====================
 # Legend: [B]=Bug, [Q]=Quality, [G]=Engine, [U]=UI, [F]=Future, [R]=Regression, [D]=Dead Code
-# Version: 4.12
 
 # ---------------------------- [BUGS] ----------------------------------
 # B29. the w dim line for rect prism is inside the shape
@@ -11074,80 +11081,9 @@ if __name__ == "__main__":
 
 
 # ================== REFACTOR SESSION NOTES =============================
-# Current file: Geometry_Forge_4_12.py
-# Last completed: Batch 4 (Safety Hardening) — all tests passed.
-#
-# COMPLETED BATCHES
-# -----------------
-# Batch 1 — Safe Deletions (v4.9)
-#   - Moved logging setup to top of file (before all class definitions)
-#   - Removed unused n = len(lengths) in SmartGeometryEngine.detect_congruence
-#   - Removed AppConstants.SCALENE_DEFAULT_HEIGHT and SCALENE_DEFAULT_OFFSET (never read)
-#   - Removed dead _remove_standalone_label method (replaced by _remove_standalone_annotation)
-#
-# Batch 2 — Consolidation (v4.10)
-#   - Extracted AppConstants.BUILTIN_LABEL_KEYS frozenset; replaced two inline dicts in
-#     _on_canvas_press. Also fixed silent bug: "Height (Tri)" was missing from the
-#     double-click branch so double-clicking that label never opened edit mode.
-#   - Removed _on_flip_h_shortcut / _on_flip_v_shortcut pass-throughs; inlined directly
-#     into _bind_shortcuts as lambda e: self._on_flip_shortcut('h'/'v', e)
-#   - CompositeTransferList.INTERNAL_NAMES is now derived automatically from DISPLAY_NAMES
-#     via {v: k for k, v in DISPLAY_NAMES.items()} — edit only DISPLAY_NAMES going forward
-#   - Removed dead current_row variable in InputController.build_from_config; inlined i+1
-#   - Triangle / Tri Triangle configs now share _tri_base dict (differ only in num_sides,
-#     uses_base_side_flip, rotation_labels, help_text)
-#   - Triangular Prism / Tri Prism configs now share _tri_prism_base dict (same pattern)
-#
-# Batch 3 — Structural Fixes (v4.11)
-#   - Fixed misplaced comment in _on_composite_press (line was indented inside the
-#     for ep_key loop body instead of at the if-hasattr level — cosmetic but misleading)
-#   - Removed redundant <Delete>/<BackSpace> bindings from _connect_composite_drag.
-#     _on_delete_shortcut (bound globally via bind_all in _bind_shortcuts) already
-#     dispatches to _on_composite_delete() when _is_composite_shape() is True.
-#     The duplicate root.bind() calls competed with bind_all and the winner depended
-#     on binding order. Also removed the never-read _composite_key_bindings list.
-#   - Added HistoryManager.restoring() context manager (contextlib.contextmanager).
-#     _apply_state now uses `with self.history_manager.restoring():` instead of manually
-#     setting is_restoring = True / finally: is_restoring = False. Flag cannot get stuck.
-#   - Added StandaloneDimLine and CompositeDimLine TypedDicts (top of file, after __all__).
-#     _standalone_dim_lines and _composite_dim_lines list declarations now use these types.
-#     All existing .get("label_x/y", midpoint_fallback) call sites are unchanged and correct
-#     — label_x/label_y are typed float | None, making the fallback intent explicit.
-#
-# Batch 4 — Safety Hardening (v4.12)
-#   - [4a] draw_circumference_arc arrow tangents: replaced hardcoded (±0.7, ±0.7) magic
-#     numbers in the "top", "left", and "right" orientation branches with mathematically
-#     derived tangent vectors: CW direction = (sin θ, -cos θ), CCW = (-sin θ, cos θ).
-#     The "bottom" branch was already correct and unchanged.
-#   - [4b] copy_to_clipboard failure feedback: added explicit except subprocess.CalledProcessError
-#     inside the Windows PowerShell fallback (ImportError) path. On failure, shows a
-#     messagebox.showwarning with the PowerShell stderr text and returns early.
-#     The temp file finally-block was already present and is unchanged.
-#   - [4c] _apply_view_scale pan clamping: tightened max_pan_x/y multiplier from 0.5 to
-#     0.35 so shape center cannot be dragged fully off-screen.
-#   - [4d] _on_text_change mutual exclusivity debounce: extracted sibling-clearing logic
-#     from _on_text_change into new _on_mutual_exclusive_clear method. Added
-#     _debounce_timers dict to InputController. _on_text_change now schedules
-#     _on_mutual_exclusive_clear via after(400ms), cancelling any pending timer first.
-#     Sibling field clears automatically ~400ms after the last keystroke — no mid-entry
-#     wiping, no error state left showing while typing.
-#
-# REMAINING BATCHES
-# -----------------
-# Batch 5 — Set and State Consolidation (low-medium risk — next up)
-#   [5a] Unify the four overlapping frozensets into one capability map:
-#          SmartGeometryEngine.POLYGON_SHAPES
-#          GeometricRotation.GEOMETRIC_SHAPES
-#          GeometricRotation.GEOMETRIC_3D_SHAPES
-#          GeometricRotation.ARC_SYMMETRIC_SHAPES
-#        Replace with a single dict mapping shape name → capability flags, then
-#        derive all four frozensets from it.
-#   [5b] Move GeometricRotation.ALL_GEOMETRIC_SHAPES computation to module level
-#        (after the class definition) to eliminate class-body evaluation order risk.
-#   [5c] Resolve ValidationError: either catch it specifically in generate_plot's
-#        except block, or replace the raise sites in triangle drawers with the
-#        ShapeValidator return-string pattern used everywhere else.
-#
+# Last completed: Batch 5 (Set and State Consolidation) — all tests passed.
+# Versioning moved to Git — no version numbers in source.
+
 # Batch 6 — Architecture (highest risk, multi-session — do last)
 #   [6a] Extract CompositeDragController from GeometryApp: move all
 #        _on_composite_press/motion/release logic, _composite_dim_lines,
