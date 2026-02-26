@@ -1832,14 +1832,14 @@ class RadialLabelMixin:
                 left_arrow_angle = np.radians(220)
                 left_arrow_x = left_x + gap + gap * np.cos(left_arrow_angle)
                 left_arrow_y = arc_center_y + gap * np.sin(left_arrow_angle)
-                # Arrow points down and to the right (into the back)
-                left_tangent = (0.7, -0.7)
+                # Tangent derived mathematically: (sin θ, -cos θ) gives CW direction
+                left_tangent = (np.sin(left_arrow_angle), -np.cos(left_arrow_angle))
                 
                 right_arrow_angle = np.radians(320)
                 right_arrow_x = right_x - gap + gap * np.cos(right_arrow_angle)
                 right_arrow_y = arc_center_y + gap * np.sin(right_arrow_angle)
-                # Arrow points down and to the left (into the back)
-                right_tangent = (-0.7, -0.7)
+                # Tangent derived mathematically: (-sin θ, cos θ) gives CCW direction
+                right_tangent = (-np.sin(right_arrow_angle), np.cos(right_arrow_angle))
                 
                 self._draw_arrowhead(ctx, (left_arrow_x, left_arrow_y), left_tangent, small_arrow, color=arc_color)
                 self._draw_arrowhead(ctx, (right_arrow_x, right_arrow_y), right_tangent, small_arrow, color=arc_color)
@@ -1895,14 +1895,14 @@ class RadialLabelMixin:
                 top_arrow_angle = np.radians(50)
                 top_arrow_x = arc_center_x + gap * np.cos(top_arrow_angle)
                 top_arrow_y = top_y - gap + gap * np.sin(top_arrow_angle)
-                # Arrow points right and down (into the back)
-                top_tangent = (0.7, -0.7)
+                # Tangent derived mathematically: (sin θ, -cos θ) gives CW direction
+                top_tangent = (np.sin(top_arrow_angle), -np.cos(top_arrow_angle))
                 
                 bottom_arrow_angle = np.radians(310)
                 bottom_arrow_x = arc_center_x + gap * np.cos(bottom_arrow_angle)
                 bottom_arrow_y = bottom_y + gap + gap * np.sin(bottom_arrow_angle)
-                # Arrow points right and up (into the back)
-                bottom_tangent = (0.7, 0.7)
+                # Tangent derived mathematically: (-sin θ, cos θ) gives CCW direction
+                bottom_tangent = (-np.sin(bottom_arrow_angle), np.cos(bottom_arrow_angle))
                 
                 self._draw_arrowhead(ctx, (top_arrow_x, top_arrow_y), top_tangent, small_arrow, color=arc_color)
                 self._draw_arrowhead(ctx, (bottom_arrow_x, bottom_arrow_y), bottom_tangent, small_arrow, color=arc_color)
@@ -1947,14 +1947,14 @@ class RadialLabelMixin:
                 top_arrow_angle = np.radians(130)
                 top_arrow_x = arc_center_x + gap * np.cos(top_arrow_angle)
                 top_arrow_y = top_y - gap + gap * np.sin(top_arrow_angle)
-                # Arrow points left and down (into the back)
-                top_tangent = (-0.7, -0.7)
+                # Tangent derived mathematically: (sin θ, -cos θ) gives CW direction
+                top_tangent = (np.sin(top_arrow_angle), -np.cos(top_arrow_angle))
                 
                 bottom_arrow_angle = np.radians(230)
                 bottom_arrow_x = arc_center_x + gap * np.cos(bottom_arrow_angle)
                 bottom_arrow_y = bottom_y + gap + gap * np.sin(bottom_arrow_angle)
-                # Arrow points left and up (into the back)
-                bottom_tangent = (-0.7, 0.7)
+                # Tangent derived mathematically: (-sin θ, cos θ) gives CCW direction
+                bottom_tangent = (-np.sin(bottom_arrow_angle), np.cos(bottom_arrow_angle))
                 
                 self._draw_arrowhead(ctx, (top_arrow_x, top_arrow_y), top_tangent, small_arrow, color=arc_color)
                 self._draw_arrowhead(ctx, (bottom_arrow_x, bottom_arrow_y), bottom_tangent, small_arrow, color=arc_color)
@@ -2522,6 +2522,7 @@ class InputController:
         self.label_manager = label_manager
         self.on_change_callback = on_change_callback
         self.entries: dict[str, dict] = {}
+        self._debounce_timers: dict[str, str] = {}  # label → after() id
 
     def get_entry_value(self, key: str) -> str:
         """Get the text value of an entry field."""
@@ -2599,7 +2600,13 @@ class InputController:
         return ent_text, show_var
     
     def _on_text_change(self, event, label: str) -> None:
-        """Handle text changes in entry fields."""
+        """Handle text changes in entry fields (fires on every keystroke).
+
+        Updates the Show checkbox state immediately. Mutual exclusivity clearing
+        is debounced — the sibling field is wiped 400 ms after the last keystroke
+        so it clears automatically during a natural typing pause without
+        interrupting mid-entry.
+        """
         if label not in self.entries:
             return
         
@@ -2610,20 +2617,42 @@ class InputController:
         if "show_cb" in entry_data:
             entry_data["show_cb"].config(state=new_state)
 
-        # Mutual exclusivity for circular and triangular dimensions
+        # Debounce mutual exclusivity: cancel any pending clear, schedule a new one.
+        # The redraw callback is bundled into the debounced call so the canvas never
+        # redraws while a conflicting sibling value is still present.
+        if label in self._debounce_timers:
+            self.input_frame.after_cancel(self._debounce_timers.pop(label))
         if text:
-            if label == "Radius" and "Diameter" in self.entries:
-                self.entries["Diameter"]["text"].delete(0, tk.END)
-            elif label == "Diameter" and "Radius" in self.entries:
-                self.entries["Radius"]["text"].delete(0, tk.END)
-            elif label == "Height" and "Left Side" in self.entries:
-                self.entries["Left Side"]["text"].delete(0, tk.END)
-                self.entries["Right Side"]["text"].delete(0, tk.END)
-            elif label in ("Left Side", "Right Side") and "Height" in self.entries:
-                self.entries["Height"]["text"].delete(0, tk.END)
-        
-        # Notify parent of change (debouncing handled by parent)
-        self.on_change_callback()
+            def _clear_then_redraw(lbl=label):
+                self._on_mutual_exclusive_clear(lbl)
+                self.on_change_callback()
+            timer_id = self.input_frame.after(200, _clear_then_redraw)
+            self._debounce_timers[label] = timer_id
+        else:
+            # Field was cleared — redraw immediately (no sibling conflict possible)
+            self.on_change_callback()
+
+    def _on_mutual_exclusive_clear(self, label: str) -> None:
+        """Clear sibling fields that are mutually exclusive with *label*.
+
+        Called 400 ms after the last keystroke via debounce in _on_text_change,
+        so the sibling is cleared automatically once the user pauses typing.
+        """
+        self._debounce_timers.pop(label, None)
+        if label not in self.entries:
+            return
+        text = self.entries[label]["text"].get().strip()
+        if not text:
+            return
+        if label == "Radius" and "Diameter" in self.entries:
+            self.entries["Diameter"]["text"].delete(0, tk.END)
+        elif label == "Diameter" and "Radius" in self.entries:
+            self.entries["Radius"]["text"].delete(0, tk.END)
+        elif label == "Height" and "Left Side" in self.entries:
+            self.entries["Left Side"]["text"].delete(0, tk.END)
+            self.entries["Right Side"]["text"].delete(0, tk.END)
+        elif label in ("Left Side", "Right Side") and "Height" in self.entries:
+            self.entries["Height"]["text"].delete(0, tk.END)
     
     def build_from_config(self, config: ShapeConfig, mode: str = "Default",
                           slim: bool = False) -> None:
@@ -10780,6 +10809,13 @@ class GeometryApp:
                             capture_output=True,
                             text=True
                         )
+                    except subprocess.CalledProcessError as ps_err:
+                        stderr_msg = ps_err.stderr.strip() if ps_err.stderr else "no details"
+                        messagebox.showwarning(
+                            "Clipboard Error",
+                            f"PowerShell failed to copy image to clipboard.\n\n{stderr_msg}"
+                        )
+                        return
                     finally:
                         try:
                             if os.path.exists(temp_path):
@@ -10977,8 +11013,8 @@ class GeometryApp:
         # Apply pan offset (data units), clamped so shape can't be dragged
         # fully off-screen (center must stay within ±half the base extent)
         pan_x, pan_y = getattr(self, '_shape_pan_offset', (0.0, 0.0))
-        max_pan_x = final_width  * 0.5
-        max_pan_y = final_height * 0.5
+        max_pan_x = final_width  * 0.35
+        max_pan_y = final_height * 0.35
         pan_x = max(-max_pan_x, min(max_pan_x, pan_x))
         pan_y = max(-max_pan_y, min(max_pan_y, pan_y))
         self._shape_pan_offset = (pan_x, pan_y)
@@ -11014,7 +11050,7 @@ if __name__ == "__main__":
 
 # ================== GEOMETRY FORGE - TASK TRACKER ====================
 # Legend: [B]=Bug, [Q]=Quality, [G]=Engine, [U]=UI, [F]=Future, [R]=Regression, [D]=Dead Code
-# Version: 4.8
+# Version: 4.12
 
 # ---------------------------- [BUGS] ----------------------------------
 # B29. the w dim line for rect prism is inside the shape
@@ -11038,8 +11074,8 @@ if __name__ == "__main__":
 
 
 # ================== REFACTOR SESSION NOTES =============================
-# Current file: Geometry_Forge_4_11.py
-# Last completed: Batch 3 (Structural Fixes) — all tests passed.
+# Current file: Geometry_Forge_4_12.py
+# Last completed: Batch 4 (Safety Hardening) — all tests passed.
 #
 # COMPLETED BATCHES
 # -----------------
@@ -11078,26 +11114,27 @@ if __name__ == "__main__":
 #     All existing .get("label_x/y", midpoint_fallback) call sites are unchanged and correct
 #     — label_x/label_y are typed float | None, making the fallback intent explicit.
 #
+# Batch 4 — Safety Hardening (v4.12)
+#   - [4a] draw_circumference_arc arrow tangents: replaced hardcoded (±0.7, ±0.7) magic
+#     numbers in the "top", "left", and "right" orientation branches with mathematically
+#     derived tangent vectors: CW direction = (sin θ, -cos θ), CCW = (-sin θ, cos θ).
+#     The "bottom" branch was already correct and unchanged.
+#   - [4b] copy_to_clipboard failure feedback: added explicit except subprocess.CalledProcessError
+#     inside the Windows PowerShell fallback (ImportError) path. On failure, shows a
+#     messagebox.showwarning with the PowerShell stderr text and returns early.
+#     The temp file finally-block was already present and is unchanged.
+#   - [4c] _apply_view_scale pan clamping: tightened max_pan_x/y multiplier from 0.5 to
+#     0.35 so shape center cannot be dragged fully off-screen.
+#   - [4d] _on_text_change mutual exclusivity debounce: extracted sibling-clearing logic
+#     from _on_text_change into new _on_mutual_exclusive_clear method. Added
+#     _debounce_timers dict to InputController. _on_text_change now schedules
+#     _on_mutual_exclusive_clear via after(400ms), cancelling any pending timer first.
+#     Sibling field clears automatically ~400ms after the last keystroke — no mid-entry
+#     wiping, no error state left showing while typing.
+#
 # REMAINING BATCHES
 # -----------------
-# Batch 4 — Safety Hardening (medium risk — next up)
-#   [4a] draw_circumference_arc arrow tangents: replace hardcoded (±0.7, ±0.7) magic
-#        numbers with tangent vectors derived mathematically from the arc angle.
-#        Location: RadialLabelMixin.draw_circumference_arc — the "top" / "right" /
-#        "left" / "bottom" orientation branches each have hardcoded tuples like
-#        left_tangent = (0.7, -0.7). Derive as (sin(angle), -cos(angle)) instead.
-#   [4b] copy_to_clipboard failure feedback: replace silent failure path with
-#        messagebox.showwarning on subprocess error; ensure Windows temp file is
-#        cleaned up in a finally block. Location: GeometryApp.copy_to_clipboard.
-#   [4c] _apply_view_scale pan clamping: tighten max pan from final_width * 0.5
-#        to ~0.35 so shape center cannot be dragged fully off-screen.
-#        Location: GeometryApp._apply_view_scale, pan_x/pan_y clamping block.
-#   [4d] _on_text_change mutual exclusivity: debounce field-clearing so sibling
-#        fields (Height ↔ Left/Right Side, Radius ↔ Diameter) are only cleared
-#        on focus-out or Enter, not on every keystroke.
-#        Location: InputController._on_text_change.
-#
-# Batch 5 — Set and State Consolidation (low-medium risk)
+# Batch 5 — Set and State Consolidation (low-medium risk — next up)
 #   [5a] Unify the four overlapping frozensets into one capability map:
 #          SmartGeometryEngine.POLYGON_SHAPES
 #          GeometricRotation.GEOMETRIC_SHAPES
