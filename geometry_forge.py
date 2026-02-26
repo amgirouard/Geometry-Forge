@@ -467,6 +467,7 @@ class TriangleType(Enum):
     ISOSCELES = "Isosceles"
     SCALENE = "Scalene"
     EQUILATERAL = "Equilateral"
+    RIGHT = "Right"
 
 
 class PolygonType(Enum):
@@ -483,6 +484,7 @@ class AppConstants:
     MIN_FONT_SIZE: int = 6
     MAX_FONT_SIZE: int = 48
     DEFAULT_FONT_FAMILY: str = "serif"
+    BTN_FONT: tuple = ("Arial", 13)   # Standard button font — apply to all tk.Button widgets for consistency
     
     SLIDER_MIN: float = 0.1
     SLIDER_MAX: float = 1.9
@@ -539,13 +541,15 @@ class AppConstants:
     TRI_PRISM_DEFAULT_BASE: float = 5.0
     TRI_PRISM_DEFAULT_HEIGHT: float = 4.0
     TRI_PRISM_DEFAULT_LENGTH: float = 4.0
-    ISOSCELES_DEFAULT_BASE: float = 5.0
-    ISOSCELES_DEFAULT_HEIGHT: float = 4.33
-    SCALENE_DEFAULT_BASE: float = 10.0
-    SCALENE_DEFAULT_L: float = 6.0
-    SCALENE_DEFAULT_R: float = 8.0
-    # Peak offset for default scalene (b=10, l=6, r=8): peak_x=(100+36-64)/20=3.6, peak_ref=3.6/10
-    SCALENE_DEFAULT_PEAK: float = 0.36
+    ISOSCELES_DEFAULT_BASE: float = 3.0
+    ISOSCELES_DEFAULT_HEIGHT: float = 5.0
+    SCALENE_DEFAULT_BASE: float = 9.0
+    RIGHT_DEFAULT_BASE: float = 4.0
+    RIGHT_DEFAULT_LEG: float = 3.0   # vertical leg (l); hypotenuse = 5
+    SCALENE_DEFAULT_L: float = 5.0
+    SCALENE_DEFAULT_R: float = 7.0
+    # Peak offset for default scalene (b=9, l=5, r=7): peak_x=(81+25-49)/18=3.17, peak_ref=3.17/9
+    SCALENE_DEFAULT_PEAK: float = 0.351852
     EQUILATERAL_DEFAULT_SIDE: float = 5.0
     
     # 3D projection ratios
@@ -888,6 +892,14 @@ def _build_triangle_sub_configs() -> dict[str, "ShapeConfig"]:
         num_sides=3,
         has_dimension_mode=False,
         help_text="Equilateral triangle with all equal sides."
+    )
+    configs["Triangle_Right"] = ShapeConfig(
+        labels=["Leg A", "Leg B", "Hypotenuse"],
+        default_values=["a", "b", "c"],
+        features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True},
+        num_sides=3,
+        has_dimension_mode=False,
+        help_text="Right triangle with 90° angle at bottom-left. Slider adjusts base vs leg ratio."
     )
     return configs
 
@@ -1394,6 +1406,7 @@ class DrawingContext:
     font_size: int
     view_scale: float = 1.0
     composite_mode: bool = False  # True when drawing inside _draw_composite_shapes
+    show_hashmarks: bool = False  # Mirrors show_hashmarks_var; drawers check this before drawing hashmarks
     line_color: str = field(init=False, default="black")
     line_args: dict = field(init=False)
     dash_args: dict = field(init=False)
@@ -2597,14 +2610,16 @@ class InputController:
 class CompositeTransferList(tk.Frame):
     """Transfer list widget for composite figure shape selection.
 
-    Source list (available shapes) on the left, arrow controls in the center,
-    destination list (selected shapes) with reorder handles on the right.
+    Source list (available shapes) on the left, arrow buttons in the centre,
+    destination list (selected shapes) on the right — drag-to-reorder supported.
     """
 
-    # Maps internal shape name -> user-facing display name in the transfer list.
-    # INTERNAL_NAMES is derived automatically — edit only DISPLAY_NAMES.
     DISPLAY_NAMES: dict[str, str] = {"Tri Prism": "Triangular Prism", "Tri Triangle": "Triangle"}
     INTERNAL_NAMES: dict[str, str] = {v: k for k, v in DISPLAY_NAMES.items()}
+
+    # Visual feedback colours for drag
+    _DRAG_COLOR   = "#cce0ff"   # highlight row being dragged over
+    _NORMAL_COLOR = "white"
 
     def __init__(self, parent: tk.Frame, available_shapes: list[str],
                  on_change_callback: Callable[..., None],
@@ -2613,125 +2628,129 @@ class CompositeTransferList(tk.Frame):
         self.available_shapes = list(available_shapes)
         self.on_change_callback = on_change_callback
         self.on_before_change_callback = on_before_change_callback
+        self._drag_start_idx: int | None = None
         self._build_ui()
-    
+
     def _build_ui(self) -> None:
         """Build the three-column transfer list layout."""
         # --- Source column ---
         src_frame = tk.Frame(self, bg=AppConstants.BG_COLOR)
         src_frame.pack(side=tk.LEFT, fill=tk.BOTH, padx=(0, 2))
-        
+
         tk.Label(src_frame, text="Available", bg=AppConstants.BG_COLOR,
                  font=("Arial", 8, "bold")).pack(side=tk.TOP)
-        
-        self.source_listbox = tk.Listbox(src_frame, width=18, height=10,
+
+        self.source_listbox = tk.Listbox(src_frame, width=18, height=5,
                                           selectmode=tk.SINGLE, exportselection=False)
         self.source_listbox.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self.source_listbox.bind("<Double-Button-1>", lambda e: self._add_selected())
-        
+
         for shape in self.available_shapes:
             self.source_listbox.insert(tk.END, self.DISPLAY_NAMES.get(shape, shape))
-        
+
         # --- Arrow buttons column ---
         btn_frame = tk.Frame(self, bg=AppConstants.BG_COLOR)
         btn_frame.pack(side=tk.LEFT, fill=tk.Y, padx=4)
-        
-        # Vertical centering spacer
-        tk.Frame(btn_frame, bg=AppConstants.BG_COLOR, height=30).pack(side=tk.TOP)
-        
-        self.add_btn = tk.Button(btn_frame, text="→", width=3, font=("Arial", 12),
+
+        tk.Frame(btn_frame, bg=AppConstants.BG_COLOR, height=10).pack(side=tk.TOP)
+
+        self.add_btn = tk.Button(btn_frame, text="→", width=3, font=AppConstants.BTN_FONT,
                                   command=self._add_selected)
         self.add_btn.pack(side=tk.TOP, pady=2)
-        
-        self.remove_btn = tk.Button(btn_frame, text="←", width=3, font=("Arial", 12),
+
+        self.remove_btn = tk.Button(btn_frame, text="←", width=3, font=AppConstants.BTN_FONT,
                                      command=self._remove_selected)
         self.remove_btn.pack(side=tk.TOP, pady=2)
-        
-        # --- Destination column ---
+
+        # --- Destination column (drag-to-reorder) ---
         dest_outer = tk.Frame(self, bg=AppConstants.BG_COLOR)
         dest_outer.pack(side=tk.LEFT, fill=tk.BOTH, padx=(2, 0))
-        
-        tk.Label(dest_outer, text="Selected", bg=AppConstants.BG_COLOR,
+
+        tk.Label(dest_outer, text="Selected  ☰ drag to reorder", bg=AppConstants.BG_COLOR,
                  font=("Arial", 8, "bold")).pack(side=tk.TOP)
-        
-        dest_row = tk.Frame(dest_outer, bg=AppConstants.BG_COLOR)
-        dest_row.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        
-        self.dest_listbox = tk.Listbox(dest_row, width=18, height=10,
-                                        selectmode=tk.SINGLE, exportselection=False)
-        self.dest_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.dest_listbox.bind("<Double-Button-1>", lambda e: self._remove_selected())
-        
-        # Reorder buttons
-        reorder_frame = tk.Frame(dest_row, bg=AppConstants.BG_COLOR)
-        reorder_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(2, 0))
-        
-        tk.Frame(reorder_frame, bg=AppConstants.BG_COLOR, height=20).pack(side=tk.TOP)
-        
-        self.up_btn = tk.Button(reorder_frame, text="▲", width=2, font=("Arial", 10),
-                                 command=self._move_up)
-        self.up_btn.pack(side=tk.TOP, pady=1)
-        
-        self.down_btn = tk.Button(reorder_frame, text="▼", width=2, font=("Arial", 10),
-                                   command=self._move_down)
-        self.down_btn.pack(side=tk.TOP, pady=1)
-    
+
+        self.dest_listbox = tk.Listbox(dest_outer, width=20, height=5,
+                                        selectmode=tk.SINGLE, exportselection=False,
+                                        cursor="fleur")
+        self.dest_listbox.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        # Drag-to-reorder bindings
+        self.dest_listbox.bind("<Button-1>",        self._drag_start)
+        self.dest_listbox.bind("<B1-Motion>",        self._drag_motion)
+        self.dest_listbox.bind("<ButtonRelease-1>",  self._drag_end)
+        self.dest_listbox.bind("<Double-Button-1>",  lambda e: self._remove_selected())
+
+    # ── drag-to-reorder ───────────────────────────────────────────────────────
+
+    def _item_index_at(self, y: int) -> int | None:
+        """Return listbox index under pixel y, or None if empty."""
+        idx = self.dest_listbox.nearest(y)
+        if self.dest_listbox.size() == 0:
+            return None
+        return idx
+
+    def _drag_start(self, event) -> None:
+        idx = self._item_index_at(event.y)
+        self._drag_start_idx = idx
+        if idx is not None:
+            self.dest_listbox.selection_clear(0, tk.END)
+            self.dest_listbox.selection_set(idx)
+
+    def _drag_motion(self, event) -> None:
+        if self._drag_start_idx is None:
+            return
+        target = self._item_index_at(event.y)
+        if target is None:
+            return
+        # Visual feedback: highlight target row
+        for i in range(self.dest_listbox.size()):
+            self.dest_listbox.itemconfig(i, bg=self._DRAG_COLOR if i == target else self._NORMAL_COLOR)
+
+    def _drag_end(self, event) -> None:
+        src = self._drag_start_idx
+        self._drag_start_idx = None
+        # Clear highlights
+        for i in range(self.dest_listbox.size()):
+            self.dest_listbox.itemconfig(i, bg=self._NORMAL_COLOR)
+        if src is None:
+            return
+        target = self._item_index_at(event.y)
+        if target is None or target == src:
+            return
+        # Move item from src to target
+        shape = self.dest_listbox.get(src)
+        self.dest_listbox.delete(src)
+        self.dest_listbox.insert(target, shape)
+        self.dest_listbox.selection_set(target)
+        self.on_change_callback(("swap", src, target))
+
+    # ── add / remove ─────────────────────────────────────────────────────────
+
     def _add_selected(self) -> None:
-        """Copy selected item from source to destination (source is a palette, not depleted)."""
         sel = self.source_listbox.curselection()
         if not sel:
             return
         idx = sel[0]
         shape = self.source_listbox.get(idx)
         self.dest_listbox.insert(tk.END, shape)
-        # Keep source selection for quick multi-add
         self.source_listbox.selection_set(idx)
         self.on_change_callback(("add", self.dest_listbox.size() - 1))
-    
+
     def _remove_selected(self) -> None:
-        """Remove selected item from destination list."""
         sel = self.dest_listbox.curselection()
         if not sel:
             return
         idx = sel[0]
         self.dest_listbox.delete(idx)
-        # Re-select next item in dest
         if self.dest_listbox.size() > 0:
-            new_idx = min(idx, self.dest_listbox.size() - 1)
-            self.dest_listbox.selection_set(new_idx)
+            self.dest_listbox.selection_set(min(idx, self.dest_listbox.size() - 1))
         self.on_change_callback(("remove", idx))
-    
-    def _move_up(self) -> None:
-        """Move selected destination item up one position."""
-        sel = self.dest_listbox.curselection()
-        if not sel or sel[0] == 0:
-            return
-        idx = sel[0]
-        shape = self.dest_listbox.get(idx)
-        self.dest_listbox.delete(idx)
-        self.dest_listbox.insert(idx - 1, shape)
-        self.dest_listbox.selection_set(idx - 1)
-        self.on_change_callback(("swap", idx, idx - 1))
-    
-    def _move_down(self) -> None:
-        """Move selected destination item down one position."""
-        sel = self.dest_listbox.curselection()
-        if not sel or sel[0] >= self.dest_listbox.size() - 1:
-            return
-        idx = sel[0]
-        shape = self.dest_listbox.get(idx)
-        self.dest_listbox.delete(idx)
-        self.dest_listbox.insert(idx + 1, shape)
-        self.dest_listbox.selection_set(idx + 1)
-        self.on_change_callback(("swap", idx, idx + 1))
-    
+
     def get_selected_shapes(self) -> list[str]:
-        """Return the ordered list of shapes in the destination list (internal names)."""
         return [self.INTERNAL_NAMES.get(self.dest_listbox.get(i), self.dest_listbox.get(i))
                 for i in range(self.dest_listbox.size())]
-    
+
     def set_selected_shapes(self, shapes: list[str]) -> None:
-        """Restore destination list state (for undo/redo). Accepts internal names."""
         self.dest_listbox.delete(0, tk.END)
         for s in shapes:
             self.dest_listbox.insert(tk.END, self.DISPLAY_NAMES.get(s, s))
@@ -2977,9 +2996,8 @@ class SquareDrawer(ShapeDrawer, PolygonLabelMixin):
         points = self.transform_points(base_points, center, transform)
         self.draw_polygon(ctx, points)
         
-        # Only show hash marks in standalone mode (not in composite).
-        # In composite, the hashmarks checkbox doesn't apply and clutters the canvas.
-        if not ctx.composite_mode:
+        # Only show hash marks when the checkbox is enabled and not in composite mode.
+        if ctx.show_hashmarks and not ctx.composite_mode:
             DrawingUtilities.draw_hash_marks(ctx, points + [points[0]])
         
         x_range, y_range = self.calculate_bounds(points)
@@ -3033,6 +3051,7 @@ class TriangleDrawer(ShapeDrawer):
             TriangleType.ISOSCELES.value: self._draw_isosceles,
             TriangleType.SCALENE.value: self._draw_scalene,
             TriangleType.EQUILATERAL.value: self._draw_equilateral,
+            TriangleType.RIGHT.value: self._draw_right,
         }
         
         method = draw_methods.get(triangle_type, self._draw_custom)
@@ -3098,7 +3117,7 @@ class TriangleDrawer(ShapeDrawer):
         self.draw_polygon(ctx, pts)
         x_range, y_range = self.calculate_bounds(pts)
         self.set_limits(ctx, x_range, y_range)
-        if equal_sides:
+        if equal_sides and ctx.show_hashmarks:
             for side_idx in equal_sides:
                 p1 = pts[side_idx]
                 p2 = pts[(side_idx + 1) % 3]
@@ -3268,10 +3287,10 @@ class TriangleDrawer(ShapeDrawer):
     def _draw_scalene(self, ctx: DrawingContext, transform: TransformState,
                       params: dict) -> None:
         aspect = ctx.aspect_ratio
-        # Derive geometry from reference side lengths (b=10, l=6, r=8)
+        # Derive geometry from reference side lengths (b=9, l=5, r=7)
         # so the default shape matches Custom mode with those values.
-        # All three sides are intentionally different; l+r > b is satisfied (14 > 10).
-        b_ref = AppConstants.SCALENE_DEFAULT_BASE   # 10.0
+        # All three sides are intentionally different; no Pythagorean triple; l+r > b (12 > 9).
+        b_ref = AppConstants.SCALENE_DEFAULT_BASE   # 9.0
         l_ref, r_ref = AppConstants.SCALENE_DEFAULT_L, AppConstants.SCALENE_DEFAULT_R
         s = (b_ref + l_ref + r_ref) / 2
         h_ref = (2 * math.sqrt(max(0, s * (s - b_ref) * (s - l_ref) * (s - r_ref)))) / b_ref
@@ -3304,6 +3323,36 @@ class TriangleDrawer(ShapeDrawer):
             ctx, transform, base_pts, label_keys,
             equal_sides=[0, 1, 2]
         )
+
+
+    def _draw_right(self, ctx: DrawingContext, transform: TransformState,
+                    params: dict) -> None:
+        """Right triangle with 90° at bottom-left.
+
+        Default 3-4-5: base=4 (Leg 1), height=3 (Leg 2), hypotenuse=5.
+        Slider (aspect) adjusts the ratio: left = taller, right = wider.
+          b = RIGHT_DEFAULT_BASE * aspect
+          l = RIGHT_DEFAULT_LEG  / aspect
+        The right angle stays at bottom-left regardless of slider position.
+        """
+        aspect = ctx.aspect_ratio
+        b = AppConstants.RIGHT_DEFAULT_BASE * aspect
+        l = AppConstants.RIGHT_DEFAULT_LEG / aspect
+        # Apex directly above origin → right angle at (0,0)
+        base_pts = self._get_base_vertices(b, l, 0.0)
+        label_keys = ["Leg B", "Hypotenuse", "Leg A"]
+        base_pts, label_keys, _ = self._rotate_to_base(
+            base_pts, label_keys, transform.base_side
+        )
+        self._draw_triangle_common(
+            ctx, transform, base_pts, label_keys,
+            show_height=False,
+        )
+        # Draw right angle marker at the 90° vertex (index 0 in canonical orientation)
+        if transform.base_side == 0:
+            base_dir = (base_pts[1][0] - base_pts[0][0], base_pts[1][1] - base_pts[0][1])
+            left_dir = (base_pts[2][0] - base_pts[0][0], base_pts[2][1] - base_pts[0][1])
+            self.draw_right_angle_marker(ctx, base_pts[0], base_dir, left_dir)
 
 
 @ShapeRegistry.register("Circle")
@@ -3686,7 +3735,8 @@ class PolygonDrawer(ShapeDrawer):
         base_points = self._calculate_vertices(num_sides, transform.base_side)
         points = self.transform_points(base_points, (0, 0), transform)
         self.draw_polygon(ctx, points)
-        DrawingUtilities.draw_hash_marks(ctx, points[:-1] + [points[0]])
+        if ctx.show_hashmarks:
+            DrawingUtilities.draw_hash_marks(ctx, points[:-1] + [points[0]])
         x_range, y_range = self.calculate_bounds(points)
         self.set_limits(ctx, x_range, y_range)
         # Store geometry hints for dim line placement (exclude duplicate closing point)
@@ -7326,7 +7376,7 @@ class GeometryApp:
         )
         tk.Label(
             shortcut_bar, text=shortcut_text, bg=AppConstants.BG_COLOR, fg="#555555",
-            font=("Arial", 8)
+            font=AppConstants.BTN_FONT
         ).pack(expand=True, pady=2)
         
         self._create_category_selector()
@@ -7366,13 +7416,13 @@ class GeometryApp:
 
         self._font_family = AppConstants.DEFAULT_FONT_FAMILY
         self.font_sans_btn = tk.Button(
-            self.center_container, text="Aa", font=("Arial", 9),
+            self.center_container, text="Aa", font=AppConstants.BTN_FONT,
             relief=tk.SUNKEN, bg=AppConstants.ACTIVE_BUTTON_COLOR,
             command=self._set_font_sans
         )
         self.font_sans_btn.grid(row=0, column=6, padx=(4, 1), pady=5)
         self.font_serif_btn = tk.Button(
-            self.center_container, text="Aa", font=("Times New Roman", 9),
+            self.center_container, text="Aa", font=("Times New Roman", AppConstants.BTN_FONT[1]),
             relief=tk.RAISED, bg=AppConstants.DEFAULT_BUTTON_COLOR,
             command=self._set_font_serif
         )
@@ -7393,11 +7443,11 @@ class GeometryApp:
 
     def _setup_options_panel(self) -> None:
         """Create Save/Copy buttons in the top bar."""
-        self.save_btn = tk.Button(self.center_container, text="Save", command=self.save_image)
+        self.save_btn = tk.Button(self.center_container, text="Save", font=AppConstants.BTN_FONT, command=self.save_image)
         self.save_btn.grid(row=0, column=10, padx=1, sticky="e")
         self.save_btn.grid_remove()
 
-        self.copy_btn = tk.Button(self.center_container, text="Copy", command=self.copy_to_clipboard)
+        self.copy_btn = tk.Button(self.center_container, text="Copy", font=AppConstants.BTN_FONT, command=self.copy_to_clipboard)
         self.copy_btn.grid(row=0, column=11, padx=1, sticky="e")
         self.copy_btn.grid_remove()
     
@@ -7462,19 +7512,19 @@ class GeometryApp:
         self.undo_redo_frame = tk.Frame(self.right_panel_frame, bg=AppConstants.BG_COLOR)
         self.undo_redo_frame.columnconfigure(0, weight=1)
         self.undo_redo_frame.columnconfigure(1, weight=1)
-        self.undo_btn = tk.Button(self.undo_redo_frame, text="Undo", state="disabled", command=self._undo_action)
-        self.redo_btn = tk.Button(self.undo_redo_frame, text="Redo", state="disabled", command=self._redo_action)
+        self.undo_btn = tk.Button(self.undo_redo_frame, text="Undo", font=AppConstants.BTN_FONT, state="disabled", command=self._undo_action)
+        self.redo_btn = tk.Button(self.undo_redo_frame, text="Redo", font=AppConstants.BTN_FONT, state="disabled", command=self._redo_action)
         self.undo_btn.grid(row=0, column=0, padx=(0, 1), sticky="ew")
         self.redo_btn.grid(row=0, column=1, padx=(1, 0), sticky="ew")
         
         # Clear/Reset
-        self.clear_workspace_btn = tk.Button(self.right_panel_frame, text="Clear Values & Labels", 
+        self.clear_workspace_btn = tk.Button(self.right_panel_frame, text="Clear Values & Labels", font=AppConstants.BTN_FONT, 
                                             command=self._clear_workspace, fg="red")
         
         # Help text
         self.mode_help_label = tk.Label(
             self.right_panel_frame, text="", bg=AppConstants.BG_COLOR, fg="gray",
-            font=("Arial", 10), justify="left", wraplength=150
+            font=AppConstants.BTN_FONT, justify="left", wraplength=150
         )
 
         # Scale slider — created once here, shown/hidden by _pack_right_panel
@@ -8199,6 +8249,11 @@ class GeometryApp:
             self.scale_manager.var("peak_offset").set(AppConstants.SCALENE_DEFAULT_PEAK)
         else:
             self.scale_manager.reset("peak_offset")
+        # Right triangle uses aspect slider centered at 1.0 (3-4-5 default)
+        if tri_type == "Right":
+            self.scale_manager.reset("aspect")
+        elif tri_type != "Custom":
+            self.scale_manager.reset("aspect")
         self._update_triangle_button_styles()
         self.root.after_idle(self._rebuild_triangle_ui)
         if not self.history_manager.is_restoring:
@@ -8218,10 +8273,12 @@ class GeometryApp:
     def on_triangle_type_change(self, event: Any | None = None) -> None:
         if not self.history_manager.is_restoring:
             self._capture_current_state()
-        if self.triangle_type_var.get() == "Scalene":
+        tri = self.triangle_type_var.get()
+        if tri == "Scalene":
             self.scale_manager.var("peak_offset").set(AppConstants.SCALENE_DEFAULT_PEAK)
         else:
             self.scale_manager.reset("peak_offset")
+        self.scale_manager.reset("aspect")
         self.root.after_idle(self._rebuild_triangle_ui)
     
     def _rebuild_triangle_ui(self) -> None:
@@ -8253,12 +8310,12 @@ class GeometryApp:
                 font=("Arial", 9, "bold")
             ).pack(side=tk.TOP, pady=(0, 1), anchor="center")
             self.default_btn = tk.Button(
-                self.shape_options_frame, text="Default", width=10,
+                self.shape_options_frame, text="Default", width=10, font=AppConstants.BTN_FONT,
                 command=lambda: self._set_dimension_mode("Default")
             )
             self.default_btn.pack(side=tk.TOP, fill=tk.X, padx=5, pady=(0, 1))
             self.custom_btn = tk.Button(
-                self.shape_options_frame, text="Custom", width=10,
+                self.shape_options_frame, text="Custom", width=10, font=AppConstants.BTN_FONT,
                 command=lambda: self._set_dimension_mode("Custom")
             )
             self.custom_btn.pack(side=tk.TOP, fill=tk.X, padx=5)
@@ -8613,9 +8670,9 @@ class GeometryApp:
         self.triangle_type_label.pack(side=tk.TOP, pady=(0, 2), anchor="center")
 
         self.tri_buttons = {}
-        for name in ["Custom", "Isosceles", "Scalene", "Equilateral"]:
+        for name in ["Custom", "Isosceles", "Scalene", "Equilateral", "Right"]:
             btn = tk.Button(
-                self.shape_options_frame, text=name, width=10, font=("Arial", 9),
+                self.shape_options_frame, text=name, width=10, font=AppConstants.BTN_FONT,
                 command=lambda n=name: self._set_triangle_type(n)
             )
             btn.pack(side=tk.TOP, fill=tk.X, padx=5, pady=1)
@@ -8627,7 +8684,7 @@ class GeometryApp:
         config = ShapeConfigProvider.get_triangle_config(triangle_type)
         if config.has_feature(ShapeFeature.SLIDER_PEAK):
             self._add_peak_offset_slider()
-        if config.has_feature(ShapeFeature.SLIDER_SHAPE) or triangle_type in ["Isosceles", "Scalene"]:
+        if config.has_feature(ShapeFeature.SLIDER_SHAPE) or triangle_type in ["Isosceles", "Scalene", "Right"]:
             self._add_shape_adjust_slider()
         # Ensure adjust_sliders_frame is packed and visible
         if self.adjust_sliders_frame.winfo_children():
@@ -8658,7 +8715,7 @@ class GeometryApp:
         self.poly_buttons = {}
         for name in [PolygonType.PENTAGON.value, PolygonType.HEXAGON.value, PolygonType.OCTAGON.value]:
             btn = tk.Button(
-                self.shape_options_frame, text=name, width=10, font=("Arial", 9),
+                self.shape_options_frame, text=name, width=10, font=AppConstants.BTN_FONT,
                 command=lambda n=name: self._set_polygon_type(n)
             )
             btn.pack(side=tk.TOP, fill=tk.X, padx=5, pady=1)
@@ -8929,7 +8986,13 @@ class GeometryApp:
             w.destroy()
         
         shape = self.shape_var.get()
-        presets = self._DIM_PRESETS.get(shape, [])
+        preset_key = shape
+        if shape == "Triangle":
+            tri_type = self.triangle_type_var.get()
+            tri_key = f"Triangle_{tri_type}"
+            if tri_key in self._DIM_PRESETS:
+                preset_key = tri_key
+        presets = self._DIM_PRESETS.get(preset_key, [])
         
         # Header
         tk.Label(self.col_dimlines, text="Labels and Lines", bg=AppConstants.BG_COLOR,
@@ -8939,15 +9002,15 @@ class GeometryApp:
         label_frame = tk.Frame(self.col_dimlines, bg=AppConstants.BG_COLOR)
         label_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 2))
         
-        self._standalone_label_entry = tk.Entry(label_frame, width=10, font=("Arial", 10))
+        self._standalone_label_entry = tk.Entry(label_frame, width=10, font=AppConstants.BTN_FONT)
         self._standalone_label_entry.pack(side=tk.LEFT, padx=(0, 2), fill=tk.X, expand=True)
         self._standalone_label_entry.bind('<Return>', lambda e: self._confirm_standalone_label())
         
-        self._standalone_text_btn = tk.Button(label_frame, text="+ Text", font=("Arial", 9),
+        self._standalone_text_btn = tk.Button(label_frame, text="+ Text", font=AppConstants.BTN_FONT,
                   command=self._confirm_standalone_label)
         self._standalone_text_btn.pack(side=tk.LEFT, padx=1)
         
-        self._standalone_cancel_btn = tk.Button(label_frame, text="Cancel", font=("Arial", 8),
+        self._standalone_cancel_btn = tk.Button(label_frame, text="Cancel", font=AppConstants.BTN_FONT,
                   command=self._cancel_standalone_edit)
         # Hidden by default — shown only during edit mode
         
@@ -8959,15 +9022,15 @@ class GeometryApp:
         
         all_buttons = [(p["label"], lambda k=p["key"], t=p["default_text"]: self._add_standalone_dim_preset(k, t)) for p in presets]
         
-        self._standalone_free_btn = tk.Button(btn_grid, text="Free", font=("Arial", 8),
+        self._standalone_free_btn = tk.Button(btn_grid, text="Free", font=AppConstants.BTN_FONT,
                   command=self._start_standalone_dim_mode)
-        self._standalone_cancel_dim_btn = tk.Button(btn_grid, text="Cancel", font=("Arial", 8),
+        self._standalone_cancel_dim_btn = tk.Button(btn_grid, text="Cancel", font=AppConstants.BTN_FONT,
                   command=self._cancel_standalone_dim_mode)
         
         row = 0
         col = 0
         for label_text, cmd in all_buttons:
-            tk.Button(btn_grid, text=label_text, font=("Arial", 8),
+            tk.Button(btn_grid, text=label_text, font=AppConstants.BTN_FONT,
                       command=cmd).grid(row=row, column=col, padx=1, pady=1, sticky="ew")
             col += 1
             if col > 1:
@@ -8981,7 +9044,7 @@ class GeometryApp:
         self._standalone_cancel_dim_btn.grid_remove()
         
         # Delete spanning both columns
-        tk.Button(self.col_dimlines, text="Delete Selected", font=("Arial", 8),
+        tk.Button(self.col_dimlines, text="Delete Selected", font=AppConstants.BTN_FONT,
                   command=self._remove_standalone_annotation).pack(side=tk.TOP, pady=(2, 0))
         
         # Show col 3
@@ -8998,7 +9061,6 @@ class GeometryApp:
 
     def _build_composite_ui(self, shape: str) -> None:
         """Build the transfer list UI for composite shapes."""
-        # Determine which source shapes to offer
         if shape == "2D Composite":
             source_shapes = [
                 "Tri Triangle" if s == "Triangle" else s
@@ -9010,55 +9072,64 @@ class GeometryApp:
                 "Tri Prism" if s == "Triangular Prism" else s
                 for s in self.shape_data.get("3D Solids", [])
             ]
-        
-        # Create and pack the transfer list widget into the input_frame
+
+        # Transfer list in input_frame (left columns)
         self.composite_transfer = CompositeTransferList(
             parent=self.input_frame,
             available_shapes=source_shapes,
             on_change_callback=self._on_composite_change
         )
         self.composite_transfer.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        
-        # Label entry row
-        label_frame = tk.Frame(self.input_frame, bg=AppConstants.BG_COLOR)
-        label_frame.pack(side=tk.TOP, fill=tk.X, pady=(4, 0))
-        
-        tk.Label(label_frame, text="Label:", bg=AppConstants.BG_COLOR,
-                 font=("Arial", 9)).pack(side=tk.LEFT, padx=(0, 2))
-        
-        self._composite_label_entry = tk.Entry(label_frame, width=8, font=("Arial", 10))
-        self._composite_label_entry.pack(side=tk.LEFT, padx=2)
+
+        # ── Labels and Lines column (col_dimlines) ───────────────────────────
+        # Clear and populate col_dimlines exactly like _build_standalone_label_ui does.
+        for w in self.col_dimlines.winfo_children():
+            w.destroy()
+
+        tk.Label(self.col_dimlines, text="Labels and Lines", bg=AppConstants.BG_COLOR,
+                 font=("Arial", 9, "bold")).pack(side=tk.TOP, anchor="center", pady=(0, 2))
+
+        # Entry + "+ Text" row
+        entry_row = tk.Frame(self.col_dimlines, bg=AppConstants.BG_COLOR)
+        entry_row.pack(side=tk.TOP, fill=tk.X, pady=(0, 2))
+
+        self._composite_label_entry = tk.Entry(entry_row, width=10, font=AppConstants.BTN_FONT)
+        self._composite_label_entry.pack(side=tk.LEFT, padx=(0, 2), fill=tk.X, expand=True)
         self._composite_label_entry.bind('<Return>', lambda e: self._confirm_composite_label())
-        
-        self._composite_text_btn = tk.Button(label_frame, text="+ Text", font=("Arial", 9),
-                  command=self._confirm_composite_label)
+
+        self._composite_text_btn = tk.Button(entry_row, text="+ Text", font=AppConstants.BTN_FONT,
+                                              command=self._confirm_composite_label)
         self._composite_text_btn.pack(side=tk.LEFT, padx=1)
-        
-        self._composite_cancel_btn = tk.Button(label_frame, text="Cancel", font=("Arial", 8),
-                  command=self._cancel_composite_edit)
+
+        self._composite_cancel_btn = tk.Button(entry_row, text="Cancel", font=AppConstants.BTN_FONT,
+                                               command=self._cancel_composite_edit)
         # Hidden by default — shown only during edit mode
-        
-        tk.Button(label_frame, text="+ Line", font=("Arial", 9),
-                  command=lambda: self._start_dim_line_mode("free")).pack(side=tk.LEFT, padx=1)
-        
-        # Dimension line preset buttons
-        dim_frame = tk.Frame(self.input_frame, bg=AppConstants.BG_COLOR)
-        dim_frame.pack(side=tk.TOP, fill=tk.X, pady=(2, 0))
-        
-        tk.Label(dim_frame, text="Presets:", bg=AppConstants.BG_COLOR,
-                 font=("Arial", 8)).pack(side=tk.LEFT, padx=(0, 2))
-        
-        for preset_name, preset_key in [("Height", "height"), ("Width", "width"), ("Radius", "radius")]:
-            tk.Button(dim_frame, text=preset_name, font=("Arial", 8),
-                      command=lambda k=preset_key: self._start_dim_line_mode(k)).pack(side=tk.LEFT, padx=1)
-        
-        tk.Button(dim_frame, text="Delete", font=("Arial", 8),
-                  command=self._remove_selected_annotation).pack(side=tk.LEFT, padx=(4, 1))
-        
-        # Status label for dimension line placement
-        self._dim_status_label = tk.Label(self.input_frame, text="", bg=AppConstants.BG_COLOR,
+
+        # 2-column preset grid  (Height | Width  /  Radius | + Line)
+        btn_grid = tk.Frame(self.col_dimlines, bg=AppConstants.BG_COLOR)
+        btn_grid.pack(side=tk.TOP, fill=tk.X)
+        btn_grid.columnconfigure(0, weight=1)
+        btn_grid.columnconfigure(1, weight=1)
+
+        presets = [("Height", "height"), ("Width", "width"), ("Radius", "radius")]
+        for i, (label, key) in enumerate(presets):
+            tk.Button(btn_grid, text=label, font=AppConstants.BTN_FONT,
+                      command=lambda k=key: self._start_dim_line_mode(k)
+                      ).grid(row=i // 2, column=i % 2, padx=1, pady=1, sticky="ew")
+
+        tk.Button(btn_grid, text="+ Line", font=AppConstants.BTN_FONT,
+                  command=lambda: self._start_dim_line_mode("free")
+                  ).grid(row=1, column=1, padx=1, pady=1, sticky="ew")
+
+        tk.Button(self.col_dimlines, text="Delete Selected", font=AppConstants.BTN_FONT,
+                  command=self._remove_selected_annotation).pack(side=tk.TOP, pady=(2, 0))
+
+        # Status label for dim-line placement feedback
+        self._dim_status_label = tk.Label(self.col_dimlines, text="", bg=AppConstants.BG_COLOR,
                                            font=("Arial", 8, "italic"), fg="#0066cc")
         self._dim_status_label.pack(side=tk.TOP, fill=tk.X, pady=(1, 0))
+
+        self.col_dimlines.grid()
         
         # Cached view limits — only recalculated on shape add/remove, not during drag
         self._composite_view_limits = None
@@ -9657,6 +9728,9 @@ class GeometryApp:
                           {"key": "width", "label": "Base", "default_text": "b"},
                           {"key": "side_l", "label": "Side L", "default_text": "l"},
                           {"key": "side_r", "label": "Side R", "default_text": "r"}],
+        "Triangle_Right": [{"key": "leg_b",  "label": "Leg B",       "default_text": "b"},
+                            {"key": "leg_a",  "label": "Leg A",       "default_text": "a"},
+                            {"key": "hyp",    "label": "Hypotenuse",  "default_text": "c"}],
     }
 
     # ------------------------------------------------------------------
@@ -9712,6 +9786,9 @@ class GeometryApp:
                 "length":       self._calc_dim_length,
                 "side":         self._calc_dim_side,
                 "circumference": self._calc_dim_circumference,
+                "leg_a":        self._calc_dim_leg_a,
+                "leg_b":        self._calc_dim_leg_b,
+                "hyp":          self._calc_dim_hyp,
             }
 
         fn = self._dim_dispatch.get(preset_key)
@@ -10198,6 +10275,54 @@ class GeometryApp:
             "constraint": None,
         }
 
+    def _calc_dim_leg_a(self, hints, b, offset, label_gap):
+        """Leg A (vertical leg) of right triangle: tri_pts[2]→tri_pts[0], offset left."""
+        pts = hints.get("tri_pts")
+        if pts and len(pts) >= 3:
+            p0, p2 = pts[0], pts[2]
+            shape_cx = (b["x_min"] + b["x_max"]) / 2
+            shape_cy = (b["y_min"] + b["y_max"]) / 2
+            res = self._dim_perp_offset(p2, p0, offset, label_gap, shape_cx, shape_cy)
+            if res:
+                return res
+        return None
+
+    def _calc_dim_leg_b(self, hints, b, offset, label_gap):
+        """Leg B (base edge) of right triangle: tri_pts[0]→tri_pts[1], offset below."""
+        pts = hints.get("tri_pts")
+        if pts and len(pts) >= 3:
+            p0, p1 = pts[0], pts[1]
+            y = min(p0[1], p1[1]) - offset
+            mx = (p0[0] + p1[0]) / 2
+            return {
+                "x1": p0[0], "y1": y, "x2": p1[0], "y2": y,
+                "label_x": mx, "label_y": y - label_gap,
+                "constraint": None,
+            }
+        return None
+
+    def _calc_dim_hyp(self, hints, b, offset, label_gap):
+        """Hypotenuse of right triangle: tri_pts[1]→tri_pts[2], offset outward away from shape."""
+        pts = hints.get("tri_pts")
+        if pts and len(pts) >= 3:
+            p1, p2 = pts[1], pts[2]
+            dx = p2[0] - p1[0]; dy = p2[1] - p1[1]
+            seg_len = math.sqrt(dx**2 + dy**2) or 1
+            nx, ny = -dy / seg_len, dx / seg_len
+            # Point normal away from the right-angle vertex (pts[0])
+            p0 = pts[0]
+            mid_x = (p1[0] + p2[0]) / 2; mid_y = (p1[1] + p2[1]) / 2
+            if nx * (mid_x - p0[0]) + ny * (mid_y - p0[1]) < 0:
+                nx, ny = -nx, -ny
+            return {
+                "x1": p1[0] + nx * offset, "y1": p1[1] + ny * offset,
+                "x2": p2[0] + nx * offset, "y2": p2[1] + ny * offset,
+                "label_x": mid_x + nx * (offset + label_gap),
+                "label_y": mid_y + ny * (offset + label_gap),
+                "constraint": None,
+            }
+        return None
+
     def _calc_dim_circumference(self, hints, b, offset, label_gap):
         # Handled as arc toggle in _add_standalone_dim_preset
         return None
@@ -10592,6 +10717,7 @@ class GeometryApp:
         ctx = self.plot_controller.create_drawing_context(
             aspect_ratio=self.scale_manager.var("aspect").get()
         )
+        ctx.show_hashmarks = self.show_hashmarks_var.get()
         self.label_manager.builtin_selected = self._builtin_selected
         transform = self._create_transform_state()
         params = self._collect_shape_params()
@@ -10800,14 +10926,18 @@ class GeometryApp:
         points: list | None = None
 
         if shape == "Triangle":
-            # Use the stored triangle vertices from geometry hints
+            # Triangle hashmarks are drawn by _draw_triangle_common (via equal_sides + ctx.show_hashmarks).
+            # Custom/Scalene/Right have no equal sides so smart detection runs here for those.
             base_p1 = hints.get("tri_base_p1")
             base_p2 = hints.get("tri_base_p2")
             apex = hints.get("tri_apex")
-            if base_p1 and base_p2 and apex:
+            tri_type = self.triangle_type_var.get()
+            # Only run smart overlay for types without built-in equal_sides marks
+            if base_p1 and base_p2 and apex and tri_type not in ("Isosceles", "Equilateral"):
                 points = [base_p1, base_p2, apex]
         elif shape == "Polygon":
-            points = hints.get("polygon_pts")
+            # Polygon hashmarks are drawn by PolygonDrawer (gated on ctx.show_hashmarks).
+            pass
         elif shape == "Rectangle":
             pts = hints.get("rect_pts")
             if pts:
@@ -10821,12 +10951,9 @@ class GeometryApp:
                         (b["x_max"], b["y_max"]), (b["x_min"], b["y_max"])
                     ]
         elif shape == "Square":
-            b = self._shape_bounds
-            if b:
-                points = [
-                    (b["x_min"], b["y_min"]), (b["x_max"], b["y_min"]),
-                    (b["x_max"], b["y_max"]), (b["x_min"], b["y_max"])
-                ]
+            # Square hashmarks are drawn by SquareDrawer (gated on ctx.show_hashmarks).
+            # Skip overlay to avoid double-drawing.
+            pass
         elif shape == "Parallelogram":
             points = hints.get("para_pts")
         elif shape == "Trapezoid":
@@ -10996,15 +11123,9 @@ if __name__ == "__main__":
 # Legend: [B]=Bug, [Q]=Quality, [G]=Engine, [U]=UI, [F]=Future, [D]=Structural
 
 # ---------------------------- [BUGS] ----------------------------------
-# B29. [FIXED] Rect prism W dim line — now follows depth edge f_br→b_br offset outward, was incorrectly using front face f_bl→f_br
-
-# ----------------- [CODE QUALITY & ARCHITECTURE] ----------------------
-# Q01. State snapshot delegation: each controller exposes get_state()/set_state(); _build_state_snapshot delegates
-# Q02. Split generate_plot into _generate_composite_plot() / _generate_standalone_plot() / _apply_transform_pipeline()
-
 # ----------------------- [GEOMETRY ENGINE] ----------------------------
 # G02. add more smart geometry features
-# G03. add right triangle preset
+# G03. [DONE] Right triangle preset — 3-4-5 default, aspect slider adjusts base/leg ratio, right-angle marker, rotate/flip supported
 
 # ------------------------- [UI/UX POLISH] -----------------------------
 # U01. [low] Replace OS messagebox dialogs with custom styled Toplevel dialogs (blue theme matching selector color #0066cc)
