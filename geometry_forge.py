@@ -596,7 +596,7 @@ class ShapeConfig:
     features: dict[str, bool] = field(default_factory=dict)
     num_sides: int = 0
     rotation_labels: list[str] = field(default_factory=list)
-    has_dimension_mode: bool = False
+    has_dimension_mode: bool = False  # Intentional: structural on/off flag, not a toggle feature — does not belong in ShapeFeature enum
     uses_base_side_flip: bool = True  # False for shapes that don't follow the base_side orientation convention (e.g. prisms, Tri Triangle)
     help_text: str = ""
     
@@ -613,21 +613,6 @@ class ShapeConfig:
     # Named helpers delegate to has_feature — single point of truth.
     def has_flip(self) -> bool:
         return self.has_feature(ShapeFeature.FLIP)
-
-    def has_rotate(self) -> bool:
-        return self.has_feature(ShapeFeature.ROTATE)
-
-    def has_hash_marks(self) -> bool:
-        return self.has_feature(ShapeFeature.HASH_MARKS)
-
-    def has_slider_shape(self) -> bool:
-        return self.has_feature(ShapeFeature.SLIDER_SHAPE)
-
-    def has_slider_slope(self) -> bool:
-        return self.has_feature(ShapeFeature.SLIDER_SLOPE)
-
-    def has_slider_peak(self) -> bool:
-        return self.has_feature(ShapeFeature.SLIDER_PEAK)
 
 
 def _build_shape_configs() -> dict[str, "ShapeConfig"]:
@@ -1009,99 +994,6 @@ class GeometricRotation:
         u = (dx * c1 + dy * s) / det
         v = (-dx * s + dy * c1) / det
         return (old_pt[0] - u, old_pt[1] - v)
-
-    @classmethod
-    def compute_transform(cls, shape: str, direction: int, num_sides: int,
-                          new_base_side: int,
-                          old_hints: dict, new_hints: dict,
-                          old_center: tuple[float, float],
-                          new_center: tuple[float, float]
-                          ) -> tuple[float, tuple[float, float], tuple[float, float]]:
-        """Compute (angle, pivot, pivot) for annotation transform.
-
-        For 2D polygon shapes the vertices are redrawn in a new orientation
-        rather than geometrically rotated, so we must derive both the rotation
-        angle AND the true pivot from the vertex correspondence.
-
-        Returns (angle_radians, pivot, pivot) — caller rotates around pivot
-        with no additional shift.  For the fallback case the old bbox-center /
-        new bbox-center pair is returned so the caller can also apply a shift.
-        """
-        hint_key = cls._VERTEX_HINT_KEYS.get(shape)
-        if hint_key:
-            old_pts = old_hints.get(hint_key)
-            new_pts = new_hints.get(hint_key)
-            if old_pts and new_pts:
-                angle = cls.compute_angle_from_vertices(old_pts, new_pts, new_base_side)
-                if angle is not None:
-                    # Derive the true pivot from the vertex that moved
-                    n_old = len(old_pts)
-                    idx_a = new_base_side % n_old
-                    old_a = old_pts[idx_a]
-                    new_a = new_pts[0]
-                    pivot = cls.compute_rotation_center(old_a, new_a, angle)
-                    if pivot is not None:
-                        return (angle, pivot, pivot)
-                    # Degenerate (180° or 0°): fall through to shift-based path
-                    return (angle, old_center, new_center)
-
-        # Fallback for 3D shapes and shapes without vertex hints:
-        # use step angle and bbox-center shift.
-        angle = -direction * (2 * math.pi / num_sides) if num_sides > 0 else 0.0
-        return (angle, old_center, new_center)
-
-    @classmethod
-    def transform_annotations(cls,
-                              labels: list[dict],
-                              dim_lines: list[dict],
-                              angle: float,
-                              old_center: tuple[float, float],
-                              new_center: tuple[float, float]) -> None:
-        """Transform annotation positions in-place after a rotation step.
-        
-        Each point is rotated by *angle* around *old_center*, then shifted so
-        the old center maps to *new_center*.
-        """
-        shift_x = new_center[0] - old_center[0]
-        shift_y = new_center[1] - old_center[1]
-        
-        for lbl in labels:
-            rx, ry = cls.rotate_point(lbl["x"], lbl["y"], angle,
-                                      old_center[0], old_center[1])
-            lbl["x"] = rx + shift_x
-            lbl["y"] = ry + shift_y
-        
-        for dim in dim_lines:
-            for xk, yk in [("x1", "y1"), ("x2", "y2"), ("label_x", "label_y")]:
-                if xk in dim and yk in dim:
-                    rx, ry = cls.rotate_point(dim[xk], dim[yk], angle,
-                                              old_center[0], old_center[1])
-                    dim[xk] = rx + shift_x
-                    dim[yk] = ry + shift_y
-
-    @classmethod
-    def flip_annotations(cls,
-                         labels: list[dict],
-                         dim_lines: list[dict],
-                         flip_h: bool, flip_v: bool,
-                         cx: float, cy: float) -> None:
-        """Mirror annotation positions in-place after a flip.
-
-        Applied in the current (post-rotation) coordinate space so the
-        annotation mirror matches what the user sees.
-        """
-        def mirror(px, py):
-            x = (2 * cx - px) if flip_h else px
-            y = (2 * cy - py) if flip_v else py
-            return x, y
-
-        for lbl in labels:
-            lbl["x"], lbl["y"] = mirror(lbl["x"], lbl["y"])
-
-        for dim in dim_lines:
-            for xk, yk in [("x1", "y1"), ("x2", "y2"), ("label_x", "label_y")]:
-                if xk in dim and yk in dim:
-                    dim[xk], dim[yk] = mirror(dim[xk], dim[yk])
 
     @classmethod
     def rotate_axes_artists(cls, ax, angle_deg: float, cx: float, cy: float) -> None:
@@ -1544,16 +1436,9 @@ class LabelManager:
     def set_custom_position(self, label: str, x: float, y: float) -> None:
         self.custom_positions[label] = (x, y)
     
-    def reset_custom_position(self, label: str) -> None:
-        if label in self.custom_positions:
-            del self.custom_positions[label]
-    
     def reset_all_custom_positions(self) -> None:
         self.custom_positions.clear()
         self.custom_dim_offsets.clear()
-    
-    def has_custom_position(self, label: str) -> bool:
-        return label in self.custom_positions
     
     def get_entry_values(self, key: str) -> tuple[str, bool]:
         """Get text and show values from label_texts only."""
@@ -2481,18 +2366,6 @@ class TransformController:
         self.base_side = 0
         self._reset_button_icons()
     
-    def toggle_flip_h(self) -> None:
-        """Toggle horizontal flip."""
-        self.flip_h = not self.flip_h
-        self._reset_button_icons()
-        self.on_change_callback()
-    
-    def toggle_flip_v(self) -> None:
-        """Toggle vertical flip."""
-        self.flip_v = not self.flip_v
-        self._reset_button_icons()
-        self.on_change_callback()
-    
     def rotate(self, direction: int, num_sides: int) -> None:
         """Rotate by one position in the given direction."""
         if num_sides <= 0:
@@ -2548,14 +2421,6 @@ class InputController:
         """Clear an entry field."""
         if key in self.entries:
             self.entries[key]["text"].delete(0, tk.END)
-    
-    def clear_entries(self) -> None:
-        """Clear all entry widgets and reset entries dict."""
-        for w in self.input_frame.winfo_children():
-            w.destroy()
-        
-        self.entries = {}
-        self.label_manager.clear_positions()
     
     def create_header(self, slim: bool = False) -> None:
         """Create the input table header row. Slim mode omits Show column."""
@@ -2966,15 +2831,6 @@ class ShapeRegistry:
         
         return cls._drawers[shape_name](deps)
     
-    @classmethod
-    def has_drawer(cls, shape_name: str) -> bool:
-        return shape_name in cls._drawers
-    
-    @classmethod
-    def get_registered_shapes(cls) -> list[str]:
-        return list(cls._drawers.keys())
-
-
 @ShapeRegistry.register("Rectangle")
 class RectangleDrawer(ShapeDrawer, PolygonLabelMixin):
     """Draws rectangles with rotation and flip support."""
@@ -3189,13 +3045,6 @@ class TriangleDrawer(ShapeDrawer):
     def _get_base_vertices(self, base: float, height: float, 
                            peak_x: float) -> Polygon:
         return [(0, 0), (base, 0), (peak_x, height)]
-    
-    def _calculate_side_lengths(self, vertices: Polygon) -> tuple[float, float, float]:
-        a, b, c = vertices[0], vertices[1], vertices[2]
-        ab = math.sqrt((b[0] - a[0])**2 + (b[1] - a[1])**2)
-        bc = math.sqrt((c[0] - b[0])**2 + (c[1] - b[1])**2)
-        ca = math.sqrt((a[0] - c[0])**2 + (a[1] - c[1])**2)
-        return (ab, bc, ca)
     
     def _rotate_to_base(self, vertices: Polygon, label_keys: list[str], 
                         base_side: int) -> tuple[Polygon, list[str], bool]:
@@ -4680,16 +4529,6 @@ class ScaleManager:
     def reset_many(self, keys: list[str]) -> None:
         for k in keys:
             self.reset(k)
-
-
-def capture_state(func):
-    """Decorator to capture state before executing a function."""
-    @functools.wraps(func)
-    def wrapper(self, *args, **kwargs):
-        if not self.history_manager.is_restoring:
-            self._capture_current_state()
-        return func(self, *args, **kwargs)
-    return wrapper
 
 
 class CompositeDragController:
@@ -9024,10 +8863,6 @@ class GeometryApp:
         # Connect drag events for composite mode
         self._connect_composite_drag()
         
-        # Track shape list for removal index detection
-        self._composite_prev_count = 0
-        self._composite_prev_shapes = []
-        
         # Capture the initial empty composite state so undo can return to it
         if not self.history_manager.is_restoring:
             self._capture_current_state()
@@ -9110,8 +8945,6 @@ class GeometryApp:
             self._composite_positions = {k: v for k, v in self._composite_positions.items() if k < n}
             self._composite_transforms = {k: v for k, v in self._composite_transforms.items() if k < n}
             self._composite_selected.clear()
-            self._composite_prev_count = n
-            self._composite_prev_shapes = list(new_shapes)
             self._composite_view_limits = None  # Force view recalculation
         
         self.generate_plot()
@@ -9158,11 +8991,6 @@ class GeometryApp:
                 self._composite_transforms = new_transforms
         
         self._composite_selected.clear()
-        
-        # Update tracking
-        new_shapes = self.composite_transfer.get_selected_shapes()
-        self._composite_prev_count = len(new_shapes)
-        self._composite_prev_shapes = list(new_shapes)
         
         self._update_composite_selection_ui()
         self.generate_plot()
@@ -11098,7 +10926,35 @@ if __name__ == "__main__":
 # F14. [low] Snapping: Add coordinate snapping for "Move" mode to align labels perfectly
 
 
-# ================== REFACTOR SESSION NOTES =============================
-# Last completed: Batch 8 (6a CompositeDragController extraction) — all tests passed.
-# Versioning moved to Git — no version numbers in source.
+# ================== REFACTOR ROADMAP ======================================
+# Last completed: Batch 7 (dead code purge) — all tests passed.
+# Versioning in Git — no version numbers in source.
 
+# BATCH 8 — Targeted Single-Line Fixes  [NEXT]
+#
+#   B1  Normalize has_flip() → has_feature(ShapeFeature.FLIP) everywhere (1 call site at ~line 11065); delete has_flip
+#   B3  Delete dead else branch in generate_plot rotation path (lines ~10700–10704); flatten to: cx, cy = self._geometry_center
+#   B5  Remove redundant canvas.draw_idle() after generate_plot() at lines ~5259 and ~6287 (keep line ~5182)
+#   B6  Add comment to _calc_dim_line_endpoints explaining why _dim_dispatch never needs invalidation
+#   C5  Rename _geometry_center → _pre_rotation_center throughout for clarity
+
+# ---
+# BATCH 9 — Composite Method Relocation  [PLANNED]
+#
+#   C1  Move _on_composite_change + _on_composite_delete into CompositeDragController
+#       as on_change(operation) and on_delete(event); leave one-liner delegates on GeometryApp
+
+# ---
+# BATCH 10 — hasattr Sweep  [PLANNED]
+#
+#   C4  Initialize all 49 hasattr-guarded widget attributes to None in GeometryApp.__init__
+#       Replace hasattr guards with: if self.attr is not None
+
+# ---
+# FUTURE — Large Structural Work
+#
+#   C2  State snapshot delegation: each controller exposes get_state()/set_state(); _build_state_snapshot delegates
+#   C3  Split generate_plot into _generate_composite_plot() / _generate_standalone_plot() / _apply_transform_pipeline()
+#   C6  [formerly B6] _dim_dispatch comment already added in Batch 8
+
+# ---
