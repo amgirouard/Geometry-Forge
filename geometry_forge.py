@@ -541,7 +541,11 @@ class AppConstants:
     TRI_PRISM_DEFAULT_LENGTH: float = 4.0
     ISOSCELES_DEFAULT_BASE: float = 5.0
     ISOSCELES_DEFAULT_HEIGHT: float = 4.33
-    SCALENE_DEFAULT_BASE: float = 7.0
+    SCALENE_DEFAULT_BASE: float = 10.0
+    SCALENE_DEFAULT_L: float = 6.0
+    SCALENE_DEFAULT_R: float = 8.0
+    # Peak offset for default scalene (b=10, l=6, r=8): peak_x=(100+36-64)/20=3.6, peak_ref=3.6/10
+    SCALENE_DEFAULT_PEAK: float = 0.36
     EQUILATERAL_DEFAULT_SIDE: float = 5.0
     
     # 3D projection ratios
@@ -3264,10 +3268,11 @@ class TriangleDrawer(ShapeDrawer):
     def _draw_scalene(self, ctx: DrawingContext, transform: TransformState,
                       params: dict) -> None:
         aspect = ctx.aspect_ratio
-        # Derive geometry from reference side lengths (b=7, l=3, r=5)
-        # so the default shape matches Custom mode with those values
-        b_ref = AppConstants.SCALENE_DEFAULT_BASE   # 7.0
-        l_ref, r_ref = 3.0, 5.0
+        # Derive geometry from reference side lengths (b=10, l=6, r=8)
+        # so the default shape matches Custom mode with those values.
+        # All three sides are intentionally different; l+r > b is satisfied (14 > 10).
+        b_ref = AppConstants.SCALENE_DEFAULT_BASE   # 10.0
+        l_ref, r_ref = AppConstants.SCALENE_DEFAULT_L, AppConstants.SCALENE_DEFAULT_R
         s = (b_ref + l_ref + r_ref) / 2
         h_ref = (2 * math.sqrt(max(0, s * (s - b_ref) * (s - l_ref) * (s - r_ref)))) / b_ref
         peak_ref = (b_ref**2 + l_ref**2 - r_ref**2) / (2 * b_ref) / b_ref
@@ -4624,6 +4629,12 @@ class CompositeDragController:
     def on_press(self, event) -> None:
         """Handle mouse press in composite mode."""
         app = self.app
+        # Move tkinter focus from any Entry to the canvas so keyboard
+        # shortcuts (r/l/h/v) are not blocked by the Entry focus guard.
+        try:
+            app.canvas.get_tk_widget().focus_set()
+        except Exception:
+            pass
         if event.inaxes != app.ax or event.button != 1:
             return
         if not app._is_composite_shape():
@@ -8184,7 +8195,10 @@ class GeometryApp:
     def _set_triangle_type(self, tri_type: str) -> None:
         """Handle triangle type button clicks."""
         self.triangle_type_var.set(tri_type)
-        self.scale_manager.reset("peak_offset")
+        if tri_type == "Scalene":
+            self.scale_manager.var("peak_offset").set(AppConstants.SCALENE_DEFAULT_PEAK)
+        else:
+            self.scale_manager.reset("peak_offset")
         self._update_triangle_button_styles()
         self.root.after_idle(self._rebuild_triangle_ui)
         if not self.history_manager.is_restoring:
@@ -8204,7 +8218,10 @@ class GeometryApp:
     def on_triangle_type_change(self, event: Any | None = None) -> None:
         if not self.history_manager.is_restoring:
             self._capture_current_state()
-        self.scale_manager.reset("peak_offset")
+        if self.triangle_type_var.get() == "Scalene":
+            self.scale_manager.var("peak_offset").set(AppConstants.SCALENE_DEFAULT_PEAK)
+        else:
+            self.scale_manager.reset("peak_offset")
         self.root.after_idle(self._rebuild_triangle_ui)
     
     def _rebuild_triangle_ui(self) -> None:
@@ -9628,8 +9645,8 @@ class GeometryApp:
                        {"key": "diameter", "label": "Diameter", "default_text": "d"},
                        {"key": "circumference", "label": "Circ.", "default_text": "c"}],
         "Rectangular Prism": [{"key": "height", "label": "Height", "default_text": "h"},
-                              {"key": "length", "label": "Width", "default_text": "w"},
-                              {"key": "width", "label": "Length", "default_text": "l"}],
+                              {"key": "length", "label": "Length", "default_text": "l"},
+                              {"key": "width", "label": "Width", "default_text": "w"}],
         "Triangular Prism": [{"key": "height", "label": "Height", "default_text": "h"},
                              {"key": "tri_base", "label": "Base", "default_text": "b"},
                              {"key": "tri_length", "label": "Length", "default_text": "l"}],
@@ -9826,18 +9843,20 @@ class GeometryApp:
         shape_cx = (shape_left + shape_right) / 2
         shape_cy = (shape_bottom + shape_top) / 2
 
-        # Rect prism: front-face bottom edge
-        if "prism_f_bl" in hints:
-            res = self._dim_perp_offset(
-                hints["prism_f_bl"], hints["prism_f_br"],
-                offset, label_gap, shape_cx, shape_cy)
-            if res:
-                return res
-            f_bl = hints["prism_f_bl"]; f_br = hints["prism_f_br"]
-            y = min(f_bl[1], f_br[1]) - offset
+        # Rect prism: W on depth edge f_br→b_br, offset perp-outward with standard gap.
+        if "prism_f_br" in hints and "prism_b_br" in hints:
+            f_br = hints["prism_f_br"]; b_br = hints["prism_b_br"]
+            mx = (f_br[0] + b_br[0]) / 2; my = (f_br[1] + b_br[1]) / 2
+            dx = b_br[0] - f_br[0]; dy = b_br[1] - f_br[1]
+            seg_len = math.sqrt(dx**2 + dy**2) or 1
+            nx, ny = -dy / seg_len, dx / seg_len
+            if nx * (mx - shape_cx) + ny * (my - shape_cy) < 0:
+                nx, ny = -nx, -ny
             return {
-                "x1": f_bl[0], "y1": y, "x2": f_br[0], "y2": y,
-                "label_x": (f_bl[0] + f_br[0]) / 2, "label_y": y - label_gap,
+                "x1": f_br[0] + nx * offset, "y1": f_br[1] + ny * offset,
+                "x2": b_br[0] + nx * offset, "y2": b_br[1] + ny * offset,
+                "label_x": mx + nx * (offset + label_gap),
+                "label_y": my + ny * (offset + label_gap),
                 "constraint": "width",
             }
 
@@ -10129,25 +10148,14 @@ class GeometryApp:
         shape_cx = (shape_left + shape_right) / 2
 
         if "prism_f_bl" in hints:
-            f_br = hints["prism_f_br"]; b_br = hints["prism_b_br"]
-            f_bl = hints["prism_f_bl"]; b_bl = hints["prism_b_bl"]
-            flip_h = hints.get("prism_flip_h", False)
-            all_pts = [hints["prism_f_bl"], hints["prism_f_br"],
-                       hints["prism_f_tl"], hints["prism_f_tr"],
-                       hints["prism_b_br"], hints["prism_b_bl"]]
-            shape_cy_prism = sum(p[1] for p in all_pts) / len(all_pts)
-            ep1_raw, ep2_raw = (f_bl, b_bl) if flip_h else (f_br, b_br)
-            dx = ep2_raw[0] - ep1_raw[0]; dy = ep2_raw[1] - ep1_raw[1]
-            seg_len = math.sqrt(dx*dx + dy*dy) or 1
-            nx, ny = -dy / seg_len, dx / seg_len
-            if (ep1_raw[1] + ep2_raw[1]) / 2 + ny > shape_cy_prism:
-                nx, ny = -nx, -ny
-            ep1 = (ep1_raw[0] + nx * offset, ep1_raw[1] + ny * offset)
-            ep2 = (ep2_raw[0] + nx * offset, ep2_raw[1] + ny * offset)
-            mx = (ep1[0] + ep2[0]) / 2; my = (ep1[1] + ep2[1]) / 2
+            # L: front-bottom edge f_bl→f_br, offset below with standard gap.
+            f_bl = hints["prism_f_bl"]; f_br = hints["prism_f_br"]
+            y = min(f_bl[1], f_br[1]) - offset
+            mx = (f_bl[0] + f_br[0]) / 2
             return {
-                "x1": ep1[0], "y1": ep1[1], "x2": ep2[0], "y2": ep2[1],
-                "label_x": mx + nx * label_gap, "label_y": my + ny * label_gap,
+                "x1": f_bl[0], "y1": y,
+                "x2": f_br[0], "y2": y,
+                "label_x": mx, "label_y": y - label_gap,
                 "constraint": None,
             }
         y = shape_bottom - offset
@@ -10988,11 +10996,10 @@ if __name__ == "__main__":
 # Legend: [B]=Bug, [Q]=Quality, [G]=Engine, [U]=UI, [F]=Future, [D]=Structural
 
 # ---------------------------- [BUGS] ----------------------------------
-# B29. the w dim line for rect prism is inside the shape
-# B30. delete button doesn't delete shapes in composite
-# B31. triangle doesn't rotate or flip with keys
+# B29. [FIXED] Rect prism W dim line — now follows depth edge f_br→b_br offset outward, was incorrectly using front face f_bl→f_br
 
 # ----------------- [CODE QUALITY & ARCHITECTURE] ----------------------
+# Q01. State snapshot delegation: each controller exposes get_state()/set_state(); _build_state_snapshot delegates
 # Q02. Split generate_plot into _generate_composite_plot() / _generate_standalone_plot() / _apply_transform_pipeline()
 
 # ----------------------- [GEOMETRY ENGINE] ----------------------------
@@ -11008,3 +11015,5 @@ if __name__ == "__main__":
 # F13. [high] Batch export: generate multiple variants (rotations/flips) in single operation
 # F14. [low] Snapping: Add coordinate snapping for "Move" mode to align labels perfectly
 
+# ---------------------- [STRUCTURAL REFACTORS] -------------------------
+# All Phase 4 structural items complete. Remaining work is bug fixes and UI polish (see sections above).
