@@ -46,6 +46,9 @@ __all__ = [
     # Public value types
     "Point",
     "Polygon",
+    "DimLine",
+    "StandaloneDimLine",
+    "CompositeDimLine",
 ]
 
 # Configure logging — must be before any class that uses logger
@@ -55,35 +58,42 @@ logger = logging.getLogger(__name__)
 logging.getLogger('matplotlib.font_manager').setLevel(logging.WARNING)
 
 
-class StandaloneDimLine(TypedDict, total=False):
-    """A freeform or preset dimension line on the standalone canvas.
+class DimLine(TypedDict, total=False):
+    """Shared fields for all dimension lines.
 
-    Required fields (total=True subset via separate TypedDict not needed here;
-    callers must always supply x1/y1/x2/y2/text).
-    Optional fields default to None / False when absent.
+    Both standalone and composite dim lines carry these fields.
+    Callers must always supply x1/y1/x2/y2/text; the rest are optional
+    and default to None / False when absent.
+    label_x/label_y: None means midpoint fallback is used at render time.
     """
     x1: float
     y1: float
     x2: float
     y2: float
     text: str
-    label_x: float | None   # None → midpoint fallback used at render time
+    label_x: float | None
     label_y: float | None
-    preset_key: str | None  # None for freeform lines
-    user_dragged: bool
     constraint: str | None  # "height", "width", or None
 
 
-class CompositeDimLine(TypedDict, total=False):
-    """A dimension line on the composite canvas."""
-    x1: float
-    y1: float
-    x2: float
-    y2: float
-    text: str
-    label_x: float | None   # None → midpoint fallback used at render time
-    label_y: float | None
-    constraint: str | None  # "height", "width", "free", or None
+class StandaloneDimLine(DimLine, total=False):
+    """A freeform or preset dimension line on the standalone canvas.
+
+    Extends DimLine with standalone-only fields:
+      preset_key:   None for freeform lines, key string for preset snap lines.
+      user_dragged: True once the label has been manually repositioned.
+    """
+    preset_key: str | None
+    user_dragged: bool
+
+
+class CompositeDimLine(DimLine, total=False):
+    """A dimension line on the composite canvas.
+
+    Extends DimLine; constraint additionally accepts "free" (composite only).
+    No extra fields beyond the base — subclassed for type-checker clarity
+    and to allow composite-specific constraint values to be documented here.
+    """
 
 
 class ValidationError(Exception):
@@ -143,9 +153,10 @@ class ShapeValidator:
         return None
     
     @staticmethod
-    def validate_diameter_radius(radius: Any, diameter: Any, 
+    def validate_diameter_radius(radius: str | None, diameter: str | None, 
                                   default_radius: float = 3.0) -> tuple[float, str | None]:
-        """Validate radius/diameter relationship. Returns (radius, error_message)."""
+        """Validate radius/diameter from string inputs (e.g. tk.StringVar.get()).
+        Returns (radius, error_message)."""
         try:
             r_val = float(radius) if radius not in [None, ""] else None
             d_val = float(diameter) if diameter not in [None, ""] else None
@@ -695,40 +706,8 @@ def _build_shape_configs() -> dict[str, "ShapeConfig"]:
         rotation_labels=["Base Down", "Left Side Down", "Base Up", "Right Side Down"],
         help_text="Triangle (composite). Rotates in 90° steps."
     )
-    configs["Triangle_Custom"] = ShapeConfig(
-        labels=["Base Width", "Height", "Left Side", "Right Side"],
-        default_values=["b", "h", "c", "a"],
-        custom_values=["5", "4", "", ""],
-        custom_labels=["Base Width", "Height", "Left Side", "Right Side"],
-        features={ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True},
-        num_sides=3,
-        has_dimension_mode=True,
-        help_text="Enter Base + Height OR Base + both Sides (mutually exclusive)."
-    )
-    configs["Triangle_Isosceles"] = ShapeConfig(
-        labels=["Base Label", "Left Label", "Right Label", "Height"],
-        default_values=["a", "b", "b", "h"],
-        features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True},
-        num_sides=3,
-        has_dimension_mode=False,
-        help_text="Isosceles triangle with two equal sides. Slider adjusts proportions."
-    )
-    configs["Triangle_Scalene"] = ShapeConfig(
-        labels=["Side A (Bottom)", "Side B (Left)", "Side C (Right)", "Height"],
-        default_values=["a", "b", "c", "h"],
-        features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True, ShapeFeature.SLIDER_PEAK: True},
-        num_sides=3,
-        has_dimension_mode=False,
-        help_text="Scalene triangle with all different sides. Sliders adjust shape proportions."
-    )
-    configs["Triangle_Equilateral"] = ShapeConfig(
-        labels=["Side A (Bottom)", "Side B (Left)", "Side C (Right)"],
-        default_values=["a", "a", "a"],
-        features={ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True},
-        num_sides=3,
-        has_dimension_mode=False,
-        help_text="Equilateral triangle with all equal sides."
-    )
+    # Triangle sub-type configs live in _TRIANGLE_SUB_CONFIGS (see below)
+    # so this dict only contains true shape names matching SHAPE_CAPABILITIES keys.
 
     # ── 3D shapes ────────────────────────────────────────────────────────────
     configs["Sphere"] = ShapeConfig(
@@ -864,8 +843,54 @@ def _build_shape_configs() -> dict[str, "ShapeConfig"]:
     return configs
 
 
-# Module-level constant — built once at import time, never mutated.
+def _build_triangle_sub_configs() -> dict[str, "ShapeConfig"]:
+    """Build triangle sub-type configs (Custom, Isosceles, Scalene, Equilateral).
+
+    Kept separate from _SHAPE_CONFIGS so the main config dict only contains
+    true shape names that match SHAPE_CAPABILITIES keys.
+    ShapeConfigProvider.get_triangle_config() delegates lookups here.
+    """
+    configs: dict[str, ShapeConfig] = {}
+    configs["Triangle_Custom"] = ShapeConfig(
+        labels=["Base Width", "Height", "Left Side", "Right Side"],
+        default_values=["b", "h", "c", "a"],
+        custom_values=["5", "4", "", ""],
+        custom_labels=["Base Width", "Height", "Left Side", "Right Side"],
+        features={ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True},
+        num_sides=3,
+        has_dimension_mode=True,
+        help_text="Enter Base + Height OR Base + both Sides (mutually exclusive)."
+    )
+    configs["Triangle_Isosceles"] = ShapeConfig(
+        labels=["Base Label", "Left Label", "Right Label", "Height"],
+        default_values=["a", "b", "b", "h"],
+        features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True},
+        num_sides=3,
+        has_dimension_mode=False,
+        help_text="Isosceles triangle with two equal sides. Slider adjusts proportions."
+    )
+    configs["Triangle_Scalene"] = ShapeConfig(
+        labels=["Side A (Bottom)", "Side B (Left)", "Side C (Right)", "Height"],
+        default_values=["a", "b", "c", "h"],
+        features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True, ShapeFeature.SLIDER_PEAK: True},
+        num_sides=3,
+        has_dimension_mode=False,
+        help_text="Scalene triangle with all different sides. Sliders adjust shape proportions."
+    )
+    configs["Triangle_Equilateral"] = ShapeConfig(
+        labels=["Side A (Bottom)", "Side B (Left)", "Side C (Right)"],
+        default_values=["a", "a", "a"],
+        features={ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True},
+        num_sides=3,
+        has_dimension_mode=False,
+        help_text="Equilateral triangle with all equal sides."
+    )
+    return configs
+
+
+# Module-level constants — built once at import time, never mutated.
 _SHAPE_CONFIGS: dict[str, "ShapeConfig"] = _build_shape_configs()
+_TRIANGLE_SUB_CONFIGS: dict[str, "ShapeConfig"] = _build_triangle_sub_configs()
 
 
 class ShapeConfigProvider:
@@ -882,11 +907,9 @@ class ShapeConfigProvider:
 
     @staticmethod
     def get_triangle_config(triangle_type: str) -> "ShapeConfig":
-        """Return config for a specific triangle sub-type."""
+        """Return config for a specific triangle sub-type (Custom/Isosceles/Scalene/Equilateral)."""
         key = f"Triangle_{triangle_type}"
-        if key in _SHAPE_CONFIGS:
-            return _SHAPE_CONFIGS[key]
-        return _SHAPE_CONFIGS.get("Triangle", ShapeConfig())
+        return _TRIANGLE_SUB_CONFIGS.get(key, _SHAPE_CONFIGS.get("Triangle", ShapeConfig()))
 
     @staticmethod
     def has_dimension_mode(shape_name: str) -> bool:
@@ -916,9 +939,22 @@ class GeometricRotation:
     ARC_SYMMETRIC_SHAPES: frozenset[str] = frozenset(
         name for name, caps in SHAPE_CAPABILITIES.items() if caps["arc_symmetric"]
     )
-    # ALL_GEOMETRIC_SHAPES is defined at module level after this class (see [5b]).
+    # Union of all shapes that use the post-draw artist transform pipeline.
+    # Defined here (after GEOMETRIC_SHAPES and GEOMETRIC_3D_SHAPES) so the
+    # class body is the single source of truth — no post-class monkey-patch needed.
+    ALL_GEOMETRIC_SHAPES: frozenset[str] = (
+        frozenset(name for name, caps in SHAPE_CAPABILITIES.items() if caps["geometric_2d"])
+        | frozenset(name for name, caps in SHAPE_CAPABILITIES.items() if caps["geometric_3d"])
+    )
     
     # Map of shape name → geometry_hints key that stores display vertices.
+    # Entries here must cover every shape in SHAPE_CAPABILITIES with "polygon": True
+    # that uses post-draw artist rotation (i.e. also has "geometric_2d": True).
+    # WARNING: if a new polygon shape is added to SHAPE_CAPABILITIES with both
+    # "polygon" and "geometric_2d" set to True, a matching entry must be added
+    # here AND the drawer must store its vertices in label_manager.geometry_hints
+    # under the corresponding key — otherwise _rotate_geometry_hints will silently
+    # skip rotating that shape's hint vertices after a keyboard rotation.
     _VERTEX_HINT_KEYS: dict[str, str] = {
         "Rectangle": "rect_pts",
         "Triangle": "tri_pts",
@@ -1241,8 +1277,8 @@ class GeometricRotation:
                     if artist.get_text().strip():
                         x_vals.append(px)
                         y_vals.append(py)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("recalculate_limits: skipping artist %r: %s", artist, exc)
         
         if x_vals and y_vals:
             ax.set_xlim(min(x_vals) - padding, max(x_vals) + padding)
@@ -1345,12 +1381,6 @@ class GeometricRotation:
 
 
 
-# [5b] Module-level constant — evaluated after GeometricRotation is fully defined,
-# eliminating class-body evaluation-order risk for the union of 2D + 3D sets.
-GeometricRotation.ALL_GEOMETRIC_SHAPES = (
-    GeometricRotation.GEOMETRIC_SHAPES | GeometricRotation.GEOMETRIC_3D_SHAPES
-)
-
 
 @dataclass
 class DrawingContext:
@@ -1438,7 +1468,21 @@ class LabelManager:
     def reset_all_custom_positions(self) -> None:
         self.custom_positions.clear()
         self.custom_dim_offsets.clear()
-    
+
+    def get_state(self) -> dict:
+        """Return serialisable snapshot of label positioning state."""
+        return {
+            "custom_positions": self.custom_positions.copy(),
+            "custom_dim_offsets": {k: list(v) for k, v in self.custom_dim_offsets.items()},
+        }
+
+    def set_state(self, state: dict) -> None:
+        """Restore label positioning state from a snapshot dict."""
+        self.custom_positions = state.get("custom_positions", {}).copy()
+        self.custom_dim_offsets = {
+            k: tuple(v) for k, v in state.get("custom_dim_offsets", {}).items()
+        }
+
     def get_entry_values(self, key: str) -> tuple[str, bool]:
         """Get text and show values from label_texts only."""
         if key in self.label_texts:
@@ -1563,329 +1607,250 @@ class RadialLabelMixin:
                                 base_position: str = "bottom") -> None:
         """Draw circumference indicator arc with arrowheads pointing away.
 
+        Dispatches to one of three private helpers depending on orientation
+        and whether an ellipse_ratio is provided:
+          _arc_flat         — true circle (2D Circle / Sphere)
+          _arc_3d_horiz     — elliptical base, horizontal orientation (base top or bottom)
+          _arc_3d_vert      — elliptical base, vertical orientation (base left or right)
+
         All arc segments and arrowheads use ctx.line_color for consistency.
 
         Args:
-            ctx: Drawing context
-            center: Center point of the circle/ellipse
-            radius: Radius of the circle (or semi-major axis for ellipse)
-            orientation: "horizontal" for upright shapes, "vertical" for shapes on side
-            label_offset: Offset for label positioning
-            ellipse_ratio: For 3D bases, the ratio of minor/major axis (e.g., 0.3 for foreshortened circle)
+            ctx:           Drawing context.
+            center:        Center point of the circle/ellipse.
+            radius:        Radius (or semi-major axis for ellipse).
+            orientation:   "horizontal" for upright shapes, "vertical" for shapes on side.
+            label_offset:  Offset for label positioning.
+            ellipse_ratio: For 3D bases, minor/major axis ratio (e.g. 0.3 for foreshortened circle).
             base_position: Where the circular base is located.
-                           horizontal orientation: "bottom" or "top"
-                           vertical orientation:   "left" or "right"
+                           horizontal: "bottom" or "top"
+                           vertical:   "left"   or "right"
         """
         if label_offset is None:
             label_offset = AppConstants.LABEL_OFFSET_RADIAL
 
         valid_positions = {"bottom", "top", "left", "right"}
         if base_position not in valid_positions:
-            logger.warning("draw_circumference_arc: unrecognized base_position %r, defaulting to 'bottom'", base_position)
+            logger.warning(
+                "draw_circumference_arc: unrecognized base_position %r, defaulting to 'bottom'",
+                base_position,
+            )
             base_position = "bottom"
 
         txt_c, show_c = self.label_manager.get_entry_values("Circumference")
         if not (txt_c.strip() and show_c):
             return
-        
-        arc_color = "#0066cc" if self.label_manager.builtin_selected == "Circumference" else ctx.line_color
-        arc_lw = AppConstants.DIMENSION_LINE_WIDTH * 1.5 if self.label_manager.builtin_selected == "Circumference" else AppConstants.DIMENSION_LINE_WIDTH
-        
-        arrow_size = min(0.15, radius * 0.06)  # Scale arrow size with radius
-        
+
+        arc_color = (
+            "#0066cc"
+            if self.label_manager.builtin_selected == "Circumference"
+            else ctx.line_color
+        )
+        arc_lw = (
+            AppConstants.DIMENSION_LINE_WIDTH * 1.5
+            if self.label_manager.builtin_selected == "Circumference"
+            else AppConstants.DIMENSION_LINE_WIDTH
+        )
+        arrow_size = min(0.15, radius * 0.06)
+
         if orientation == "horizontal" and ellipse_ratio is None:
-            # True circle (2D Circle or Sphere) - full 270° arc outside the shape
-            arc_radius = radius + label_offset
-            start_angle = 45
-            end_angle = 315
-            
-            # Draw the arc (explicitly using ctx.line_color)
-            ctx.ax.add_patch(patches.Arc(
-                center, arc_radius * 2, arc_radius * 2,
-                theta1=start_angle, theta2=end_angle,
-                color=arc_color, lw=arc_lw,
-                linestyle="--"
-            ))
-            
-            # Calculate arrowhead positions and directions
-            start_rad = np.radians(start_angle)
-            start_pt = (center[0] + arc_radius * np.cos(start_rad),
-                       center[1] + arc_radius * np.sin(start_rad))
-            # Arrow points into gap (CW direction at start)
-            start_tangent = (np.sin(start_rad), -np.cos(start_rad))
-            
-            end_rad = np.radians(end_angle)
-            end_pt = (center[0] + arc_radius * np.cos(end_rad),
-                     center[1] + arc_radius * np.sin(end_rad))
-            # Arrow points into gap (CCW direction at end)
-            end_tangent = (-np.sin(end_rad), np.cos(end_rad))
-            
-            self._draw_arrowhead(ctx, start_pt, start_tangent, arrow_size, centered=True, color=arc_color)
-            self._draw_arrowhead(ctx, end_pt, end_tangent, arrow_size, centered=True, color=arc_color)
-            
-            # Label offset to the left of the arc
-            label_x = center[0] - arc_radius - label_offset * 0.3
-            label_y = center[1]
-            self.draw_text(label_x, label_y, "Circumference", 
-                          use_background=True, ha="right", va="center")
-        
+            self._arc_flat(ctx, center, radius, label_offset, arc_color, arc_lw, arrow_size)
         elif orientation == "horizontal" and ellipse_ratio is not None:
-            # Elliptical base (3D shapes) - arc on opposite side from shape body
-            gap = radius * 0.15
-            base_width = radius * 2
-            base_height = radius * 2 * ellipse_ratio
-            # Arc wraps AROUND the base - add gap to both dimensions
-            arc_width = base_width + (gap * 2)
-            arc_height = base_height + (gap * 2)
-            back_arc_size = gap * 2
-            small_arrow = min(0.1, radius * 0.04)
-            
-            if base_position == "bottom":
-                # Arc below the base, curving up at ends
-                arc_center_y = center[1] - gap
-                
-                # Draw bottom half of ellipse (180° to 360°) - using ctx.line_color
-                ctx.ax.add_patch(patches.Arc(
-                    (center[0], arc_center_y), arc_width, arc_height,
-                    theta1=180, theta2=360,
-                    color=arc_color, lw=arc_lw,
-                    linestyle="--"
-                ))
-                
-                half_width = arc_width / 2
-                left_x = center[0] - half_width
-                right_x = center[0] + half_width
-                
-                # Back continuation arcs curving up - using ctx.line_color
-                ctx.ax.add_patch(patches.Arc(
-                    (left_x + gap, arc_center_y), back_arc_size, back_arc_size,
-                    theta1=135, theta2=180,
-                    color=arc_color, lw=arc_lw,
-                    linestyle="--"
-                ))
-                ctx.ax.add_patch(patches.Arc(
-                    (right_x - gap, arc_center_y), back_arc_size, back_arc_size,
-                    theta1=0, theta2=45,
-                    color=arc_color, lw=arc_lw,
-                    linestyle="--"
-                ))
-                
-                # Arrowheads
-                left_arrow_angle = np.radians(130)
-                left_arrow_x = left_x + gap + gap * np.cos(left_arrow_angle)
-                left_arrow_y = arc_center_y + gap * np.sin(left_arrow_angle)
-                left_tangent = (np.sin(left_arrow_angle), -np.cos(left_arrow_angle))
-                
-                right_arrow_angle = np.radians(50)
-                right_arrow_x = right_x - gap + gap * np.cos(right_arrow_angle)
-                right_arrow_y = arc_center_y + gap * np.sin(right_arrow_angle)
-                right_tangent = (-np.sin(right_arrow_angle), np.cos(right_arrow_angle))
-                
-                self._draw_arrowhead(ctx, (left_arrow_x, left_arrow_y), left_tangent, small_arrow, color=arc_color)
-                self._draw_arrowhead(ctx, (right_arrow_x, right_arrow_y), right_tangent, small_arrow, color=arc_color)
-                
-                # Label below
-                label_x = center[0]
-                label_y = arc_center_y - (arc_height / 2) - label_offset * 0.3
-                self.draw_text(label_x, label_y, "Circumference",
-                              use_background=True, ha="center", va="top")
-            
-            elif base_position == "top":
-                # Arc above the base, curving down at ends
-                arc_center_y = center[1] + gap
-                
-                # Draw top half of ellipse (0° to 180°) - using ctx.line_color
-                ctx.ax.add_patch(patches.Arc(
-                    (center[0], arc_center_y), arc_width, arc_height,
-                    theta1=0, theta2=180,
-                    color=arc_color, lw=arc_lw,
-                    linestyle="--"
-                ))
-                
-                half_width = arc_width / 2
-                left_x = center[0] - half_width
-                right_x = center[0] + half_width
-                
-                # Back continuation arcs curving down - using ctx.line_color
-                ctx.ax.add_patch(patches.Arc(
-                    (left_x + gap, arc_center_y), back_arc_size, back_arc_size,
-                    theta1=180, theta2=225,
-                    color=arc_color, lw=arc_lw,
-                    linestyle="--"
-                ))
-                ctx.ax.add_patch(patches.Arc(
-                    (right_x - gap, arc_center_y), back_arc_size, back_arc_size,
-                    theta1=315, theta2=360,
-                    color=arc_color, lw=arc_lw,
-                    linestyle="--"
-                ))
-                
-                # Arrowheads - pointing down and inward (continuing around back)
-                left_arrow_angle = np.radians(220)
-                left_arrow_x = left_x + gap + gap * np.cos(left_arrow_angle)
-                left_arrow_y = arc_center_y + gap * np.sin(left_arrow_angle)
-                # Tangent derived mathematically: (sin θ, -cos θ) gives CW direction
-                left_tangent = (np.sin(left_arrow_angle), -np.cos(left_arrow_angle))
-                
-                right_arrow_angle = np.radians(320)
-                right_arrow_x = right_x - gap + gap * np.cos(right_arrow_angle)
-                right_arrow_y = arc_center_y + gap * np.sin(right_arrow_angle)
-                # Tangent derived mathematically: (-sin θ, cos θ) gives CCW direction
-                right_tangent = (-np.sin(right_arrow_angle), np.cos(right_arrow_angle))
-                
-                self._draw_arrowhead(ctx, (left_arrow_x, left_arrow_y), left_tangent, small_arrow, color=arc_color)
-                self._draw_arrowhead(ctx, (right_arrow_x, right_arrow_y), right_tangent, small_arrow, color=arc_color)
-                
-                # Label above
-                label_x = center[0]
-                label_y = arc_center_y + (arc_height / 2) + label_offset * 0.3
-                self.draw_text(label_x, label_y, "Circumference",
-                              use_background=True, ha="center", va="bottom")
-        
+            self._arc_3d_horiz(ctx, center, radius, label_offset, ellipse_ratio,
+                               base_position, arc_color, arc_lw)
         elif orientation == "vertical" and ellipse_ratio is not None:
-            # Vertical elliptical base (shapes on side)
-            gap = radius * 0.15
-            base_width = radius * 2 * ellipse_ratio
-            base_height = radius * 2
-            # Arc wraps AROUND the base - add gap to both dimensions
-            arc_width = base_width + (gap * 2)
-            arc_height = base_height + (gap * 2)
-            back_arc_size = gap * 2
-            small_arrow = min(0.2, radius * 0.08)
-            
-            if base_position == "left":
-                # Arc to the left of the base, curving right at ends
-                arc_center_x = center[0] - gap
-                
-                # Draw left half of ellipse (90° to 270°) - using ctx.line_color
-                ctx.ax.add_patch(patches.Arc(
-                    (arc_center_x, center[1]), arc_width, arc_height,
-                    theta1=90, theta2=270,
-                    color=arc_color, lw=arc_lw,
-                    linestyle="--"
-                ))
-                
-                half_height = arc_height / 2
-                top_y = center[1] + half_height
-                bottom_y = center[1] - half_height
-                
-                # Back continuation arcs curving right - using ctx.line_color
-                ctx.ax.add_patch(patches.Arc(
-                    (arc_center_x, top_y - gap), back_arc_size, back_arc_size,
-                    theta1=45, theta2=90,
-                    color=arc_color, lw=arc_lw,
-                    linestyle="--"
-                ))
-                ctx.ax.add_patch(patches.Arc(
-                    (arc_center_x, bottom_y + gap), back_arc_size, back_arc_size,
-                    theta1=270, theta2=315,
-                    color=arc_color, lw=arc_lw,
-                    linestyle="--"
-                ))
-                
-                # Arrowheads - pointing right and inward (continuing around back)
-                top_arrow_angle = np.radians(50)
-                top_arrow_x = arc_center_x + gap * np.cos(top_arrow_angle)
-                top_arrow_y = top_y - gap + gap * np.sin(top_arrow_angle)
-                # Tangent derived mathematically: (sin θ, -cos θ) gives CW direction
-                top_tangent = (np.sin(top_arrow_angle), -np.cos(top_arrow_angle))
-                
-                bottom_arrow_angle = np.radians(310)
-                bottom_arrow_x = arc_center_x + gap * np.cos(bottom_arrow_angle)
-                bottom_arrow_y = bottom_y + gap + gap * np.sin(bottom_arrow_angle)
-                # Tangent derived mathematically: (-sin θ, cos θ) gives CCW direction
-                bottom_tangent = (-np.sin(bottom_arrow_angle), np.cos(bottom_arrow_angle))
-                
-                self._draw_arrowhead(ctx, (top_arrow_x, top_arrow_y), top_tangent, small_arrow, color=arc_color)
-                self._draw_arrowhead(ctx, (bottom_arrow_x, bottom_arrow_y), bottom_tangent, small_arrow, color=arc_color)
-                
-                # Label to the left
-                label_x = arc_center_x - (arc_width / 2) - label_offset * 0.3
-                label_y = center[1]
-                self.draw_text(label_x, label_y, "Circumference",
-                              use_background=True, ha="right", va="center")
-            
-            elif base_position == "right":
-                # Arc to the right of the base, curving left at ends
-                arc_center_x = center[0] + gap
-                
-                # Draw right half of ellipse (270° to 90°, i.e., -90° to 90°) - using ctx.line_color
-                ctx.ax.add_patch(patches.Arc(
-                    (arc_center_x, center[1]), arc_width, arc_height,
-                    theta1=-90, theta2=90,
-                    color=arc_color, lw=arc_lw,
-                    linestyle="--"
-                ))
-                
-                half_height = arc_height / 2
-                top_y = center[1] + half_height
-                bottom_y = center[1] - half_height
-                
-                # Back continuation arcs curving left - using ctx.line_color
-                ctx.ax.add_patch(patches.Arc(
-                    (arc_center_x, top_y - gap), back_arc_size, back_arc_size,
-                    theta1=90, theta2=135,
-                    color=arc_color, lw=arc_lw,
-                    linestyle="--"
-                ))
-                ctx.ax.add_patch(patches.Arc(
-                    (arc_center_x, bottom_y + gap), back_arc_size, back_arc_size,
-                    theta1=225, theta2=270,
-                    color=arc_color, lw=arc_lw,
-                    linestyle="--"
-                ))
-                
-                # Arrowheads - pointing left and inward (continuing around back)
-                top_arrow_angle = np.radians(130)
-                top_arrow_x = arc_center_x + gap * np.cos(top_arrow_angle)
-                top_arrow_y = top_y - gap + gap * np.sin(top_arrow_angle)
-                # Tangent derived mathematically: (sin θ, -cos θ) gives CW direction
-                top_tangent = (np.sin(top_arrow_angle), -np.cos(top_arrow_angle))
-                
-                bottom_arrow_angle = np.radians(230)
-                bottom_arrow_x = arc_center_x + gap * np.cos(bottom_arrow_angle)
-                bottom_arrow_y = bottom_y + gap + gap * np.sin(bottom_arrow_angle)
-                # Tangent derived mathematically: (-sin θ, cos θ) gives CCW direction
-                bottom_tangent = (-np.sin(bottom_arrow_angle), np.cos(bottom_arrow_angle))
-                
-                self._draw_arrowhead(ctx, (top_arrow_x, top_arrow_y), top_tangent, small_arrow, color=arc_color)
-                self._draw_arrowhead(ctx, (bottom_arrow_x, bottom_arrow_y), bottom_tangent, small_arrow, color=arc_color)
-                
-                # Label to the right
-                label_x = arc_center_x + (arc_width / 2) + label_offset * 0.3
-                label_y = center[1]
-                self.draw_text(label_x, label_y, "Circumference",
-                              use_background=True, ha="left", va="center")
-        
+            self._arc_3d_vert(ctx, center, radius, label_offset, ellipse_ratio,
+                              base_position, arc_color, arc_lw)
         else:
-            # Fallback for vertical without ellipse_ratio
+            # Fallback: vertical orientation without ellipse_ratio
             arc_radius_x = label_offset
             arc_radius_y = radius + label_offset
-            
-            start_angle = -90
-            end_angle = 90
-            
             ctx.ax.add_patch(patches.Arc(
                 center, arc_radius_x * 2, arc_radius_y * 2,
-                theta1=start_angle, theta2=end_angle,
-                color=arc_color, lw=arc_lw,
-                linestyle="--"
+                theta1=-90, theta2=90,
+                color=arc_color, lw=arc_lw, linestyle="--",
             ))
-            
             top_pt = (center[0], center[1] + arc_radius_y)
-            top_tangent = (-1, 0)
-            
             bottom_pt = (center[0], center[1] - arc_radius_y)
-            bottom_tangent = (-1, 0)
-            
-            self._draw_arrowhead(ctx, top_pt, top_tangent, arrow_size, color=arc_color)
-            self._draw_arrowhead(ctx, bottom_pt, bottom_tangent, arrow_size, color=arc_color)
-            
+            self._draw_arrowhead(ctx, top_pt, (-1, 0), arrow_size, color=arc_color)
+            self._draw_arrowhead(ctx, bottom_pt, (-1, 0), arrow_size, color=arc_color)
             label_x = center[0] + arc_radius_x + label_offset
-            label_y = center[1]
-            self.draw_text(label_x, label_y, "Circumference",
-                          use_background=True, ha="left", va="center")
-    
+            self.draw_text(label_x, center[1], "Circumference",
+                           use_background=True, ha="left", va="center")
+
+    def _arc_flat(self, ctx: DrawingContext, center: Point, radius: float,
+                  label_offset: float, arc_color: str, arc_lw: float,
+                  arrow_size: float) -> None:
+        """True-circle circumference arc (2D Circle / Sphere): 270° dashed arc."""
+        arc_radius = radius + label_offset
+        ctx.ax.add_patch(patches.Arc(
+            center, arc_radius * 2, arc_radius * 2,
+            theta1=45, theta2=315,
+            color=arc_color, lw=arc_lw, linestyle="--",
+        ))
+        start_rad = np.radians(45)
+        start_pt = (center[0] + arc_radius * np.cos(start_rad),
+                    center[1] + arc_radius * np.sin(start_rad))
+        end_rad = np.radians(315)
+        end_pt = (center[0] + arc_radius * np.cos(end_rad),
+                  center[1] + arc_radius * np.sin(end_rad))
+        self._draw_arrowhead(ctx, start_pt,
+                             (np.sin(start_rad), -np.cos(start_rad)),
+                             arrow_size, centered=True, color=arc_color)
+        self._draw_arrowhead(ctx, end_pt,
+                             (-np.sin(end_rad), np.cos(end_rad)),
+                             arrow_size, centered=True, color=arc_color)
+        label_x = center[0] - arc_radius - label_offset * 0.3
+        self.draw_text(label_x, center[1], "Circumference",
+                       use_background=True, ha="right", va="center")
+
+    def _arc_3d_horiz(self, ctx: DrawingContext, center: Point, radius: float,
+                      label_offset: float, ellipse_ratio: float,
+                      base_position: str, arc_color: str, arc_lw: float) -> None:
+        """Elliptical circumference arc for horizontal-base 3D shapes (top or bottom)."""
+        gap = radius * 0.15
+        base_width = radius * 2
+        base_height = radius * 2 * ellipse_ratio
+        arc_width = base_width + gap * 2
+        arc_height = base_height + gap * 2
+        back_arc_size = gap * 2
+        small_arrow = min(0.1, radius * 0.04)
+        half_width = arc_width / 2
+        left_x = center[0] - half_width
+        right_x = center[0] + half_width
+
+        if base_position == "bottom":
+            arc_center_y = center[1] - gap
+            # Main half-ellipse (bottom) + back-continuation corners
+            ctx.ax.add_patch(patches.Arc(
+                (center[0], arc_center_y), arc_width, arc_height,
+                theta1=180, theta2=360,
+                color=arc_color, lw=arc_lw, linestyle="--",
+            ))
+            ctx.ax.add_patch(patches.Arc(
+                (left_x + gap, arc_center_y), back_arc_size, back_arc_size,
+                theta1=135, theta2=180,
+                color=arc_color, lw=arc_lw, linestyle="--",
+            ))
+            ctx.ax.add_patch(patches.Arc(
+                (right_x - gap, arc_center_y), back_arc_size, back_arc_size,
+                theta1=0, theta2=45,
+                color=arc_color, lw=arc_lw, linestyle="--",
+            ))
+            la = np.radians(130)
+            ra = np.radians(50)
+            self._draw_arrowhead(ctx,
+                (left_x + gap + gap * np.cos(la), arc_center_y + gap * np.sin(la)),
+                (np.sin(la), -np.cos(la)), small_arrow, color=arc_color)
+            self._draw_arrowhead(ctx,
+                (right_x - gap + gap * np.cos(ra), arc_center_y + gap * np.sin(ra)),
+                (-np.sin(ra), np.cos(ra)), small_arrow, color=arc_color)
+            self.draw_text(center[0],
+                           arc_center_y - arc_height / 2 - label_offset * 0.3,
+                           "Circumference", use_background=True, ha="center", va="top")
+
+        else:  # base_position == "top"
+            arc_center_y = center[1] + gap
+            ctx.ax.add_patch(patches.Arc(
+                (center[0], arc_center_y), arc_width, arc_height,
+                theta1=0, theta2=180,
+                color=arc_color, lw=arc_lw, linestyle="--",
+            ))
+            ctx.ax.add_patch(patches.Arc(
+                (left_x + gap, arc_center_y), back_arc_size, back_arc_size,
+                theta1=180, theta2=225,
+                color=arc_color, lw=arc_lw, linestyle="--",
+            ))
+            ctx.ax.add_patch(patches.Arc(
+                (right_x - gap, arc_center_y), back_arc_size, back_arc_size,
+                theta1=315, theta2=360,
+                color=arc_color, lw=arc_lw, linestyle="--",
+            ))
+            la = np.radians(220)
+            ra = np.radians(320)
+            self._draw_arrowhead(ctx,
+                (left_x + gap + gap * np.cos(la), arc_center_y + gap * np.sin(la)),
+                (np.sin(la), -np.cos(la)), small_arrow, color=arc_color)
+            self._draw_arrowhead(ctx,
+                (right_x - gap + gap * np.cos(ra), arc_center_y + gap * np.sin(ra)),
+                (-np.sin(ra), np.cos(ra)), small_arrow, color=arc_color)
+            self.draw_text(center[0],
+                           arc_center_y + arc_height / 2 + label_offset * 0.3,
+                           "Circumference", use_background=True, ha="center", va="bottom")
+
+    def _arc_3d_vert(self, ctx: DrawingContext, center: Point, radius: float,
+                     label_offset: float, ellipse_ratio: float,
+                     base_position: str, arc_color: str, arc_lw: float) -> None:
+        """Elliptical circumference arc for vertical-base 3D shapes (left or right)."""
+        gap = radius * 0.15
+        base_width = radius * 2 * ellipse_ratio
+        base_height = radius * 2
+        arc_width = base_width + gap * 2
+        arc_height = base_height + gap * 2
+        back_arc_size = gap * 2
+        small_arrow = min(0.2, radius * 0.08)
+        half_height = arc_height / 2
+        top_y = center[1] + half_height
+        bottom_y = center[1] - half_height
+
+        if base_position == "left":
+            arc_center_x = center[0] - gap
+            ctx.ax.add_patch(patches.Arc(
+                (arc_center_x, center[1]), arc_width, arc_height,
+                theta1=90, theta2=270,
+                color=arc_color, lw=arc_lw, linestyle="--",
+            ))
+            ctx.ax.add_patch(patches.Arc(
+                (arc_center_x, top_y - gap), back_arc_size, back_arc_size,
+                theta1=45, theta2=90,
+                color=arc_color, lw=arc_lw, linestyle="--",
+            ))
+            ctx.ax.add_patch(patches.Arc(
+                (arc_center_x, bottom_y + gap), back_arc_size, back_arc_size,
+                theta1=270, theta2=315,
+                color=arc_color, lw=arc_lw, linestyle="--",
+            ))
+            ta = np.radians(50)
+            ba = np.radians(310)
+            self._draw_arrowhead(ctx,
+                (arc_center_x + gap * np.cos(ta), top_y - gap + gap * np.sin(ta)),
+                (np.sin(ta), -np.cos(ta)), small_arrow, color=arc_color)
+            self._draw_arrowhead(ctx,
+                (arc_center_x + gap * np.cos(ba), bottom_y + gap + gap * np.sin(ba)),
+                (-np.sin(ba), np.cos(ba)), small_arrow, color=arc_color)
+            self.draw_text(arc_center_x - arc_width / 2 - label_offset * 0.3,
+                           center[1], "Circumference",
+                           use_background=True, ha="right", va="center")
+
+        else:  # base_position == "right"
+            arc_center_x = center[0] + gap
+            ctx.ax.add_patch(patches.Arc(
+                (arc_center_x, center[1]), arc_width, arc_height,
+                theta1=-90, theta2=90,
+                color=arc_color, lw=arc_lw, linestyle="--",
+            ))
+            ctx.ax.add_patch(patches.Arc(
+                (arc_center_x, top_y - gap), back_arc_size, back_arc_size,
+                theta1=90, theta2=135,
+                color=arc_color, lw=arc_lw, linestyle="--",
+            ))
+            ctx.ax.add_patch(patches.Arc(
+                (arc_center_x, bottom_y + gap), back_arc_size, back_arc_size,
+                theta1=225, theta2=270,
+                color=arc_color, lw=arc_lw, linestyle="--",
+            ))
+            ta = np.radians(130)
+            ba = np.radians(230)
+            self._draw_arrowhead(ctx,
+                (arc_center_x + gap * np.cos(ta), top_y - gap + gap * np.sin(ta)),
+                (np.sin(ta), -np.cos(ta)), small_arrow, color=arc_color)
+            self._draw_arrowhead(ctx,
+                (arc_center_x + gap * np.cos(ba), bottom_y + gap + gap * np.sin(ba)),
+                (-np.sin(ba), np.cos(ba)), small_arrow, color=arc_color)
+            self.draw_text(arc_center_x + arc_width / 2 + label_offset * 0.3,
+                           center[1], "Circumference",
+                           use_background=True, ha="left", va="center")
+
     def _draw_arrowhead(self, ctx: DrawingContext, tip: Point, 
                         direction: tuple[float, float], size: float,
                         centered: bool = True, color: str = None) -> None:
@@ -2041,13 +2006,21 @@ class ShapeDrawer:
     
     def get_param_num(self, params: dict, key: str, default: float,
                       aspect_ratio: float) -> float:
-        """Get numeric parameter from params dict with fallback to scaled default."""
+        """Get numeric parameter from params dict with fallback to scaled default.
+
+        Returns the stored value when positive and finite.
+        Falls back to `default * aspect_ratio` for missing / non-finite inputs.
+        Raises ValidationError for zero or negative values — callers must not
+        pass dimension params that are intentionally non-positive.
+        """
         num_key = f"{key}_num"
         if num_key in params and params[num_key] is not None:
             value = params[num_key]
             if not math.isfinite(value):
                 return default * aspect_ratio
             if value == 0:
+                raise ValidationError(f"{key} must be positive")
+            if value < 0:
                 raise ValidationError(f"{key} must be positive")
             if value > 0:
                 return value
@@ -2177,8 +2150,7 @@ class ShapeDrawer:
         ys = [p[1] for p in points]
         return ((min(xs), max(xs)), (min(ys), max(ys)))
     
-    def set_limits(self, ctx: DrawingContext, x_range: tuple, y_range: tuple,
-                   padding: float = 0.1) -> None:
+    def set_limits(self, ctx: DrawingContext, x_range: tuple, y_range: tuple) -> None:
         # B29 fix: expand bounds by at least the label buffer so preset labels
         # placed outside shape geometry are still within the tight bounds that
         # _apply_view_scale uses to compute margins. Without this, small shapes
@@ -2199,7 +2171,7 @@ class ShapeDrawer:
     
     def draw_circle(self, ctx: DrawingContext, center: Point, radius: float) -> None:
         if radius <= 0:
-            radius = 1
+            raise ValidationError(f"Circle radius must be positive, got {radius}")
         ctx.ax.add_patch(patches.Circle(center, radius, **ctx.line_args))
     
     def draw_ellipse(self, ctx: DrawingContext, center: Point, width: float,
@@ -2424,8 +2396,15 @@ class TransformController:
         return TransformState(
             flip_h=self.flip_h,
             flip_v=self.flip_v,
-            base_side=self.base_side
+            base_side=self.base_side,
         )
+
+    def set_state(self, state: dict) -> None:
+        """Restore transform state from a snapshot dict."""
+        t = state.get("transforms", {"h": False, "v": False, "side": 0})
+        self.flip_h = t.get("h", False)
+        self.flip_v = t.get("v", False)
+        self.base_side = t.get("side", 0)
 
 
 class InputController:
@@ -2580,6 +2559,15 @@ class InputController:
         
         self.input_frame.update_idletasks()
     
+    def get_state(self) -> dict:
+        """Return serialisable snapshot of all entry values."""
+        return {"entries": {k: self.get_entry_value(k) for k in self.entries}}
+
+    def set_state(self, state: dict) -> None:
+        """Restore entry values from a snapshot dict."""
+        for k, val in state.get("entries", {}).items():
+            self.set_entry_value(k, val)
+
     def collect_params(self) -> dict[str, Any]:
         """Collect all entry values safely into a params dict."""
         params = {}
@@ -3097,7 +3085,6 @@ class TriangleDrawer(ShapeDrawer):
                                base_pts: Polygon, label_keys: list[str], 
                                show_height: bool = False,
                                equal_sides: list[int] | None = None,
-                               padding: float = 1.0,
                                height_label_key: str = "Height") -> Polygon:
         xs = [p[0] for p in base_pts]
         ys = [p[1] for p in base_pts]
@@ -3106,7 +3093,7 @@ class TriangleDrawer(ShapeDrawer):
         pts = self.transform_points(base_pts, center, transform)
         self.draw_polygon(ctx, pts)
         x_range, y_range = self.calculate_bounds(pts)
-        self.set_limits(ctx, x_range, y_range, padding)
+        self.set_limits(ctx, x_range, y_range)
         if equal_sides:
             for side_idx in equal_sides:
                 p1 = pts[side_idx]
@@ -3270,7 +3257,6 @@ class TriangleDrawer(ShapeDrawer):
         self._draw_triangle_common(
             ctx, transform, base_pts, label_keys,
             equal_sides=[1, 2],
-            padding=1.5,
             show_height=True,
             height_label_key="Height"
         )
@@ -3297,7 +3283,6 @@ class TriangleDrawer(ShapeDrawer):
         )
         self._draw_triangle_common(
             ctx, transform, base_pts, label_keys,
-            padding=1.5,
             show_height=True,
             height_label_key="Height"
         )
@@ -3312,8 +3297,7 @@ class TriangleDrawer(ShapeDrawer):
         label_keys = self.rotate_list(all_labels, transform.base_side)
         self._draw_triangle_common(
             ctx, transform, base_pts, label_keys,
-            equal_sides=[0, 1, 2],
-            padding=2
+            equal_sides=[0, 1, 2]
         )
 
 
@@ -4563,6 +4547,18 @@ class ScaleManager:
     def reset_many(self, keys: list[str]) -> None:
         for k in keys:
             self.reset(k)
+
+    def get_state(self) -> dict:
+        """Return serialisable snapshot of all scale values."""
+        return {"scales": {k: self.var(k).get() for k in self.specs}}
+
+    def set_state(self, state: dict) -> None:
+        """Restore scale values from a snapshot dict."""
+        for k, v in state.get("scales", {}).items():
+            try:
+                self.var(k).set(v)
+            except (KeyError, Exception):
+                pass
 
 
 class CompositeDragController:
@@ -6742,6 +6738,17 @@ class GeometryApp:
         self._label_hover_active: bool = False
         self._shape_pan_offset: tuple[float, float] = (0.0, 0.0)  # data-unit pan offset
         self._scale_after_id: str | None = None
+        # Transform/render state — set during generate_plot; initialized here so
+        # all code paths can read them without getattr fallbacks.
+        # NOTE: _builtin_selected is a @property backed by standalone_ctrl and is
+        # NOT assigned here — standalone_ctrl initialises it in its own __init__.
+        self._suppress_preset_dim_snap: bool = False
+        self._axes_pixel_aspect: float = 4.0 / 3.0
+        self._canonical_pre_rotation_center: tuple[float, float] | None = None
+        self._pre_rotation_center: tuple[float, float] | None = None
+        self._flip_center: tuple[float, float] | None = None
+        self._canvas_target_w: int = 970
+        self._canvas_target_h: int = 727
         self.label_manager = LabelManager()
         self.history_manager = HistoryManager()
         # Controllers must be instantiated AFTER label_manager / history_manager
@@ -8039,23 +8046,28 @@ class GeometryApp:
         except tk.TclError as e:
             logger.debug("Spinbox update failed (likely widget destroyed): %s", e)
 
-    def _set_font_sans(self) -> None:
-        self.font_family = "sans-serif"
-        self.plot_controller.set_font_family("sans-serif")
-        self.font_sans_btn.config(relief=tk.SUNKEN, bg=AppConstants.ACTIVE_BUTTON_COLOR)
-        self.font_serif_btn.config(relief=tk.RAISED, bg=AppConstants.DEFAULT_BUTTON_COLOR)
+    def _set_font_family(self, family: str) -> None:
+        """Set the active font family, update button states, redraw, and capture undo state."""
+        self.font_family = family
+        self.plot_controller.set_font_family(family)
+        is_sans = (family == "sans-serif")
+        self.font_sans_btn.config(
+            relief=tk.SUNKEN if is_sans else tk.RAISED,
+            bg=AppConstants.ACTIVE_BUTTON_COLOR if is_sans else AppConstants.DEFAULT_BUTTON_COLOR,
+        )
+        self.font_serif_btn.config(
+            relief=tk.RAISED if is_sans else tk.SUNKEN,
+            bg=AppConstants.DEFAULT_BUTTON_COLOR if is_sans else AppConstants.ACTIVE_BUTTON_COLOR,
+        )
         self.generate_plot()
         if not self.history_manager.is_restoring:
             self._capture_current_state()
 
+    def _set_font_sans(self) -> None:
+        self._set_font_family("sans-serif")
+
     def _set_font_serif(self) -> None:
-        self.font_family = "serif"
-        self.plot_controller.set_font_family("serif")
-        self.font_sans_btn.config(relief=tk.RAISED, bg=AppConstants.DEFAULT_BUTTON_COLOR)
-        self.font_serif_btn.config(relief=tk.SUNKEN, bg=AppConstants.ACTIVE_BUTTON_COLOR)
-        self.generate_plot()
-        if not self.history_manager.is_restoring:
-            self._capture_current_state()
+        self._set_font_family("serif")
 
     def _on_line_width_blur(self) -> None:
         """Handle line weight spinbox losing focus - restore value if empty."""
@@ -8148,11 +8160,7 @@ class GeometryApp:
         self.canvas.draw_idle()
         self.canvas.flush_events()
         # Debounced state capture so undo works after scale/pan changes
-        if hasattr(self, '_scale_after_id') and self._scale_after_id:
-            try:
-                self.root.after_cancel(self._scale_after_id)
-            except Exception:
-                pass
+        self._cancel_after('_scale_after_id')
         self._scale_after_id = self.root.after(400, self._finalize_scale_change)
 
     def _finalize_scale_change(self) -> None:
@@ -8391,15 +8399,12 @@ class GeometryApp:
             else:
                 self._update_dimension_mode_buttons()
             
-            for k, v in state.get("scales", {}).items():
-                try: self.scale_manager.var(k).set(v)
-                except Exception: pass
+            # Delegate controller restore
+            self.scale_manager.set_state(state)
+            self.input_controller.set_state(state)
             # Restore pan offset
             pan = state.get("view_pan", [0.0, 0.0])
             self._shape_pan_offset = (float(pan[0]), float(pan[1]))
-
-            for k, val in state.get("entries", {}).items():
-                self.input_controller.set_entry_value(k, val)
 
             # Restore composite transfer list and positions if applicable
             composite_shapes = state.get("composite_shapes", [])
@@ -8458,11 +8463,8 @@ class GeometryApp:
                         self.label_manager.label_texts.pop(lbl_key, None)
                         self.label_manager.label_visibility.pop(lbl_key, None)
 
-            t = state.get("transforms", {"h": False, "v": False, "side": 0})
-            self.transform_controller.flip_h, self.transform_controller.flip_v = t["h"], t["v"]
-            self.transform_controller.base_side = t["side"]
-            self.label_manager.custom_positions = state.get("custom_labels", {}).copy()
-            self.label_manager.custom_dim_offsets = {k: tuple(v) for k, v in state.get("custom_dim_offsets", {}).items()}
+            self.transform_controller.set_state(state)
+            self.label_manager.set_state(state)
 
         self._update_undo_redo_buttons()
         self._update_rotation_label()
@@ -8493,14 +8495,14 @@ class GeometryApp:
             self._apply_state(next_s)
 
     def _build_state_snapshot(self) -> dict:
-        """Build current UI state snapshot for history."""
-        # Include all scales (including view_scale) in history so undo restores zoom/pan
-        scales_to_save = {k: self.scale_manager.var(k).get() for k in self.scale_manager.specs}
-        
-        # Compute once — result is constant for the lifetime of this method
+        """Build current UI state snapshot for history.
+
+        Delegates positioning/entry/scale/transform state to the four controllers
+        via their get_state() methods; composite and standalone annotation state
+        is captured directly here since it belongs to GeometryApp.
+        """
         is_composite = self._is_composite_shape(self.shape_var.get())
 
-        # Capture composite transfer list contents only for composite shapes
         composite_selected = []
         composite_positions = {}
         composite_transforms = {}
@@ -8508,34 +8510,29 @@ class GeometryApp:
             composite_selected = self.composite_transfer.get_selected_shapes()
             composite_positions = dict(self._composite_positions)
             composite_transforms = {k: dict(v) for k, v in self._composite_transforms.items()}
-        
-        return {
+
+        state = {
             "cat": self.cat_var.get(),
             "shape": self.shape_var.get(),
             "font_size": self.font_size_var.get(),
-            "line_width": self.line_width_var.get() if self.line_width_var is not None else AppConstants.DEFAULT_LINE_WIDTH,
-            "font_family": getattr(self, 'font_family', AppConstants.DEFAULT_FONT_FAMILY),
+            "line_width": (
+                self.line_width_var.get()
+                if self.line_width_var is not None
+                else AppConstants.DEFAULT_LINE_WIDTH
+            ),
+            "font_family": self.font_family,
             "dim_mode": self.dimension_mode_var.get(),
             "tri_type": self.triangle_type_var.get(),
             "poly_type": self.polygon_type_var.get(),
-            "scales": scales_to_save,
-            "transforms": {
-                "h": self.transform_controller.flip_h,
-                "v": self.transform_controller.flip_v,
-                "side": self.transform_controller.base_side
-            },
-            "custom_labels": self.label_manager.custom_positions.copy(),
-            "custom_dim_offsets": {k: list(v) for k, v in self.label_manager.custom_dim_offsets.items()},
-            "entries": {k: self.input_controller.get_entry_value(k) for k in self.input_controller.entries.keys()},
+            "show_hashmarks": self.show_hashmarks_var.get(),
+            "view_pan": list(self._shape_pan_offset),
             "composite_shapes": composite_selected,
             "composite_positions": composite_positions,
             "composite_transforms": composite_transforms,
             "composite_labels": [dict(lbl) for lbl in self._composite_labels] if is_composite else [],
             "composite_dim_lines": [dict(d) for d in self._composite_dim_lines] if is_composite else [],
-            "show_hashmarks": self.show_hashmarks_var.get() if hasattr(self, 'show_hashmarks_var') else False,
             "standalone_labels": [dict(lbl) for lbl in self._standalone_labels] if not is_composite else [],
             "standalone_dim_lines": [dict(d) for d in self._standalone_dim_lines] if not is_composite else [],
-            "view_pan": list(getattr(self, '_shape_pan_offset', (0.0, 0.0))),
             **{
                 f"{st_key}_text": self.label_manager.label_texts.get(lbl_key, "")
                 for lbl_key, st_key in self.TOGGLE_LABEL_KEYS
@@ -8545,6 +8542,16 @@ class GeometryApp:
                 for lbl_key, st_key in self.TOGGLE_LABEL_KEYS
             },
         }
+        # Delegate controller state
+        state.update(self.scale_manager.get_state())
+        state.update({"transforms": {
+            "h": self.transform_controller.flip_h,
+            "v": self.transform_controller.flip_v,
+            "side": self.transform_controller.base_side,
+        }})
+        state.update(self.label_manager.get_state())
+        state.update(self.input_controller.get_state())
+        return state
 
     def _update_undo_redo_buttons(self) -> None:
         can_undo = len(self.history_manager.undo_stack) > 1
@@ -10513,152 +10520,21 @@ class GeometryApp:
             ))
         
     def generate_plot(self) -> None:
+        """Top-level draw entry point. Dispatches to composite or standalone path."""
         try:
-            # Sync entries to label manager before any state capture or drawing
             shape = self.shape_var.get()
             if not shape:
                 return
-            
-            # B28 fix: flush pending geometry changes (e.g. control columns
-            # appearing on first shape selection) so the canvas widget has its
-            # true size BEFORE we read _axes_pixel_aspect. Without this, the
-            # very first draw (e.g. navigating directly to Sphere) uses the
-            # pre-layout canvas dimensions, stretching equal-aspect shapes.
+            # B28 fix: flush pending geometry changes so the canvas has its true
+            # size before we read _axes_pixel_aspect.
             self.root.update_idletasks()
-            
             self.plot_controller.clear()
             self.plot_controller.setup_axes()
-            
-            # Preserve toggle-based labels across clear
-            _preserved = {}
-            for lbl_key, _ in self.TOGGLE_LABEL_KEYS:
-                if lbl_key in self.label_manager.label_texts:
-                    _preserved[lbl_key] = (self.label_manager.label_texts[lbl_key],
-                                           self.label_manager.label_visibility.get(lbl_key, True))
-            
-            self.label_manager.clear_label_texts()
-            
-            # Restore preserved toggle labels
-            for key, (text, vis) in _preserved.items():
-                if text:
-                    self.label_manager.set_label_text(key, text, vis)
-            
-            # --- Composite shape rendering ---
+            self._preserve_toggle_labels()
             if self._is_composite_shape(shape) and self.composite_transfer is not None:
-                selected = self.composite_transfer.get_selected_shapes()
-                if not selected:
-                    # Set paper-proportioned limits for empty canvas
-                    pixel_aspect = getattr(self, '_axes_pixel_aspect', 4.0/3.0)
-                    page_h = 20.0
-                    page_w = page_h * pixel_aspect
-                    self.ax.set_xlim(0, page_w)
-                    self.ax.set_ylim(0, page_h)
-                    self.ax.text(0.5, 0.5, "Add shapes from the Available list\nusing the → button",
-                                ha="center", va="center", fontsize=14, color="gray",
-                                transform=self.ax.transAxes)
-                    self.plot_controller.refresh()
-                    return
-                
-                self._draw_composite_shapes(selected)
-                self.plot_controller.refresh()
-                return
-            
-            ctx = self.plot_controller.create_drawing_context(
-                aspect_ratio=self.scale_manager.var("aspect").get()
-            )
-
-            _builtin_sel = self._builtin_selected
-            self.label_manager.builtin_selected = _builtin_sel
-            
-            transform = self._create_transform_state()
-            params = self._collect_shape_params()
-            
-            # Unified geometric transform for ALL shapes (2D and 3D):
-            # 1. Draw at canonical orientation (base_side=0, no flip).
-            # 2. Rotate all artists by the requested base_side angle.
-            # 3. Flip all artists in the current (post-rotation) orientation.
-            # This is the same pipeline used by composite mode, ensuring
-            # rotation and flip behave identically — everything moves as a unit.
-            # Flip always operates on the visible shape so "flip H" always
-            # mirrors left<->right as currently displayed, regardless of rotation.
-            actual_base_side = transform.base_side
-            actual_flip_h = transform.flip_h
-            actual_flip_v = transform.flip_v
-            is_unified_rotate = shape in GeometricRotation.ALL_GEOMETRIC_SHAPES
-            if is_unified_rotate:
-                # Always draw canonical: no rotation, no flip
-                transform = TransformState(flip_h=False, flip_v=False, base_side=0)
-
-            error = self.plot_controller.draw_shape(shape, ctx, transform, params)
-            if error:
-                self.plot_controller.draw_error(error)
-
-            # Canonical geometry center: use the axes limits that the drawer's
-            # set_limits() set from shape vertex bounds.  This excludes dimension
-            # line endpoints and label positions that extend the bbox asymmetrically
-            # and would shift the center on asymmetric shapes (triangles, prisms).
-            _xlim = self.ax.get_xlim()
-            _ylim = self.ax.get_ylim()
-            _canonical_center = ((_xlim[0] + _xlim[1]) / 2, (_ylim[0] + _ylim[1]) / 2)
-            # Single assignment; _pre_rotation_center is an alias for the same value.
-            self._canonical_pre_rotation_center = _canonical_center
-            self._pre_rotation_center = self._canonical_pre_rotation_center
-
-            if is_unified_rotate and not error:
-                config = ShapeConfigProvider.get(shape)
-                num_sides = config.num_sides if config.num_sides > 0 else 4
-
-                # Step 2: rotate around the geometry center
-                if actual_base_side != 0:
-                    angle_deg = -(360.0 / num_sides) * actual_base_side
-                    cx, cy = self._pre_rotation_center
-                    GeometricRotation.rotate_axes_artists(self.ax, angle_deg, cx, cy)
-                    GeometricRotation.recalculate_limits(self.ax)
-                    self._rotate_geometry_hints(math.radians(angle_deg), cx, cy)
-
-                # Step 3: flip in current orientation (after rotation)
-                if actual_flip_h or actual_flip_v:
-                    # Flip operates in post-rotation visual space, so use the
-                    # current axis limits center (set by recalculate_limits after
-                    # rotation), NOT the canonical center.
-                    xlim = self.ax.get_xlim()
-                    ylim = self.ax.get_ylim()
-                    cx = (xlim[0] + xlim[1]) / 2
-                    cy = (ylim[0] + ylim[1]) / 2
-                    GeometricRotation.flip_axes_artists(
-                        self.ax, actual_flip_h, actual_flip_v, cx, cy)
-                    GeometricRotation.recalculate_limits(self.ax)
-                    self._flip_geometry_hints(actual_flip_h, actual_flip_v, cx, cy)
-                    # Store flip center for _flip_with_annotations to use
-                    self._flip_center = (cx, cy)
-                else:
-                    # No flip: use canonical center (annotations will pivot here)
-                    self._flip_center = self._canonical_pre_rotation_center
-            
-            # Draw smart hashmarks if enabled
-            if (getattr(self, 'show_hashmarks_var', None) is not None
-                    and self.show_hashmarks_var.get()
-                    and shape in SmartGeometryEngine.POLYGON_SHAPES):
-                self._draw_smart_hashmarks_overlay(ctx)
-
-            # Store tight shape bounds before view scale expands them
-            self._shape_bounds = {
-                "x_min": self.ax.get_xlim()[0],
-                "x_max": self.ax.get_xlim()[1],
-                "y_min": self.ax.get_ylim()[0],
-                "y_max": self.ax.get_ylim()[1]
-            }
-            
-            # Apply view scale AFTER shape sets its limits
-            self._apply_view_scale()
-            
-            # Track built-in dim line endpoints for drag hit-testing
-            self._draw_builtin_dim_lines()
-
-            # Draw standalone freeform labels
-            self._draw_standalone_labels()
-            
-            self.plot_controller.refresh()
+                self._generate_composite_plot(shape)
+            else:
+                self._generate_standalone_plot(shape)
         except Exception as e:
             logger.exception("Unhandled error in generate_plot()")
             try:
@@ -10669,8 +10545,132 @@ class GeometryApp:
             except Exception:
                 pass
 
+    def _preserve_toggle_labels(self) -> None:
+        """Persist toggle-based label values across a plot clear/redraw cycle."""
+        preserved = {}
+        for lbl_key, _ in self.TOGGLE_LABEL_KEYS:
+            if lbl_key in self.label_manager.label_texts:
+                preserved[lbl_key] = (
+                    self.label_manager.label_texts[lbl_key],
+                    self.label_manager.label_visibility.get(lbl_key, True),
+                )
+        self.label_manager.clear_label_texts()
+        for key, (text, vis) in preserved.items():
+            if text:
+                self.label_manager.set_label_text(key, text, vis)
+
+    def _generate_composite_plot(self, shape: str) -> None:
+        """Render a composite (multi-shape) canvas."""
+        selected = self.composite_transfer.get_selected_shapes()
+        if not selected:
+            pixel_aspect = self._axes_pixel_aspect
+            page_h = 20.0
+            page_w = page_h * pixel_aspect
+            self.ax.set_xlim(0, page_w)
+            self.ax.set_ylim(0, page_h)
+            self.ax.text(
+                0.5, 0.5,
+                "Add shapes from the Available list\nusing the → button",
+                ha="center", va="center", fontsize=14, color="gray",
+                transform=self.ax.transAxes,
+            )
+            self.plot_controller.refresh()
+            return
+        self._draw_composite_shapes(selected)
+        self.plot_controller.refresh()
+
+    def _generate_standalone_plot(self, shape: str) -> None:
+        """Render a single standalone shape with the full transform pipeline."""
+        ctx = self.plot_controller.create_drawing_context(
+            aspect_ratio=self.scale_manager.var("aspect").get()
+        )
+        self.label_manager.builtin_selected = self._builtin_selected
+        transform = self._create_transform_state()
+        params = self._collect_shape_params()
+        self._apply_transform_pipeline(ctx, shape, transform, params)
+
+        # Draw smart hashmarks if enabled
+        if (self.show_hashmarks_var.get()
+                and shape in SmartGeometryEngine.POLYGON_SHAPES):
+            self._draw_smart_hashmarks_overlay(ctx)
+
+        # Store tight shape bounds before view scale expands them
+        self._shape_bounds = {
+            "x_min": self.ax.get_xlim()[0],
+            "x_max": self.ax.get_xlim()[1],
+            "y_min": self.ax.get_ylim()[0],
+            "y_max": self.ax.get_ylim()[1],
+        }
+        self._apply_view_scale()
+        self._draw_builtin_dim_lines()
+        self._draw_standalone_labels()
+        self.plot_controller.refresh()
+
+    def _apply_transform_pipeline(self, ctx: "DrawingContext", shape: str,
+                                   transform: "TransformState",
+                                   params: dict) -> None:
+        """Draw shape at canonical orientation then apply rotate → flip artist pipeline.
+
+        For shapes in GeometricRotation.ALL_GEOMETRIC_SHAPES the unified pipeline is:
+          1. Draw canonical (base_side=0, no flip) so vertex coords are predictable.
+          2. Rotate all artists around the canonical center by the step angle.
+          3. Flip all artists in the post-rotation visual space.
+        For all other shapes the transform is passed directly to the drawer.
+
+        Updates self._canonical_pre_rotation_center, _pre_rotation_center, and
+        _flip_center so that _rotate_with_annotations and _flip_with_annotations
+        use the correct pivot points.
+        """
+        actual_base_side = transform.base_side
+        actual_flip_h = transform.flip_h
+        actual_flip_v = transform.flip_v
+        is_unified = shape in GeometricRotation.ALL_GEOMETRIC_SHAPES
+        if is_unified:
+            transform = TransformState(flip_h=False, flip_v=False, base_side=0)
+
+        error = self.plot_controller.draw_shape(shape, ctx, transform, params)
+        if error:
+            self.plot_controller.draw_error(error)
+
+        # Record canonical center from the tight limits set_limits() placed.
+        _xlim = self.ax.get_xlim()
+        _ylim = self.ax.get_ylim()
+        canonical_center = ((_xlim[0] + _xlim[1]) / 2, (_ylim[0] + _ylim[1]) / 2)
+        self._canonical_pre_rotation_center = canonical_center
+        self._pre_rotation_center = canonical_center
+
+        if not (is_unified and not error):
+            return
+
+        config = ShapeConfigProvider.get(shape)
+        num_sides = config.num_sides if config.num_sides > 0 else 4
+
+        # Step 2: rotate
+        if actual_base_side != 0:
+            angle_deg = -(360.0 / num_sides) * actual_base_side
+            cx, cy = self._pre_rotation_center
+            GeometricRotation.rotate_axes_artists(self.ax, angle_deg, cx, cy)
+            GeometricRotation.recalculate_limits(self.ax)
+            self._rotate_geometry_hints(math.radians(angle_deg), cx, cy)
+
+        # Step 3: flip (in post-rotation visual space)
+        if actual_flip_h or actual_flip_v:
+            xlim = self.ax.get_xlim()
+            ylim = self.ax.get_ylim()
+            cx = (xlim[0] + xlim[1]) / 2
+            cy = (ylim[0] + ylim[1]) / 2
+            GeometricRotation.flip_axes_artists(self.ax, actual_flip_h, actual_flip_v, cx, cy)
+            GeometricRotation.recalculate_limits(self.ax)
+            self._flip_geometry_hints(actual_flip_h, actual_flip_v, cx, cy)
+            self._flip_center = (cx, cy)
+        else:
+            self._flip_center = self._canonical_pre_rotation_center
+
     def _save_figure(self, path: str | BytesIO, fmt: str = "png") -> None:
         """Save the current figure to a file. Central method for all export paths."""
+        # pad_inches=-0.1 is intentional: matplotlib's tight-layout leaves a small
+        # whitespace ring even at pad_inches=0. A slight negative value crops that
+        # ring so the exported image is flush to the shape bounds.
         self.fig.savefig(path, format=fmt, dpi=150, bbox_inches="tight", facecolor="#ffffff", pad_inches=-0.1)
 
     def save_image(self) -> None:
@@ -10985,7 +10985,7 @@ if __name__ == "__main__":
 
 
 # ================== GEOMETRY FORGE - TASK TRACKER ====================
-# Legend: [B]=Bug, [Q]=Quality, [G]=Engine, [U]=UI, [F]=Future, [R]=Regression, [D]=Dead Code
+# Legend: [B]=Bug, [Q]=Quality, [G]=Engine, [U]=UI, [F]=Future, [D]=Structural
 
 # ---------------------------- [BUGS] ----------------------------------
 # B29. the w dim line for rect prism is inside the shape
@@ -10993,17 +10993,18 @@ if __name__ == "__main__":
 # B31. triangle doesn't rotate or flip with keys
 
 # ----------------- [CODE QUALITY & ARCHITECTURE] ----------------------
-# Q01. State snapshot delegation: each controller exposes get_state()/set_state(); _build_state_snapshot delegates
 # Q02. Split generate_plot into _generate_composite_plot() / _generate_standalone_plot() / _apply_transform_pipeline()
+
 # ----------------------- [GEOMETRY ENGINE] ----------------------------
 # G02. add more smart geometry features
 # G03. add right triangle preset
 
 # ------------------------- [UI/UX POLISH] -----------------------------
-# U02. polish menu UI
-# U03. design a menu UI of equal size regardless of shape (doesn't stretch down and change drawing are) which allows a set drawing area
 # U01. [low] Replace OS messagebox dialogs with custom styled Toplevel dialogs (blue theme matching selector color #0066cc)
+# U02. polish menu UI
+# U03. design a menu UI of equal size regardless of shape (doesn't stretch down and change drawing area) which allows a set drawing area
 
 # ------------------------ [FUTURE IDEAS] --------------------------------
 # F13. [high] Batch export: generate multiple variants (rotations/flips) in single operation
 # F14. [low] Snapping: Add coordinate snapping for "Move" mode to align labels perfectly
+
