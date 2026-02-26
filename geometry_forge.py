@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
-from typing import Optional, Any, TypedDict
+from typing import Any, TypedDict, Callable
+from collections.abc import Iterator
 import contextlib
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import Enum, StrEnum
 import math
-import functools
 import numpy as np
 import subprocess
 import platform
@@ -94,7 +94,7 @@ class ShapeValidator:
     """Centralized validation for shape parameters."""
     
     @staticmethod
-    def validate_positive(name: str, value: Optional[float]) -> Optional[str]:
+    def validate_positive(name: str, value: float | None) -> str | None:
         """Check if value is positive. Returns error message or None."""
         if value is None:
             return None
@@ -105,9 +105,9 @@ class ShapeValidator:
         return None
     
     @staticmethod
-    def validate_equal(name1: str, val1: Optional[float], 
-                       name2: str, val2: Optional[float],
-                       tolerance: float = 0.001) -> Optional[str]:
+    def validate_equal(name1: str, val1: float | None, 
+                       name2: str, val2: float | None,
+                       tolerance: float = 0.001) -> str | None:
         """Check if two values are equal. Returns error message or None."""
         if val1 is not None and not math.isfinite(val1):
             return f"{name1} must be a finite number"
@@ -119,8 +119,8 @@ class ShapeValidator:
         return None
     
     @staticmethod
-    def validate_all_equal(values: dict[str, Optional[float]], 
-                          tolerance: float = 0.001) -> Optional[str]:
+    def validate_all_equal(values: dict[str, float | None], 
+                          tolerance: float = 0.001) -> str | None:
         """Check if all provided values are equal. Returns error message or None."""
         for k, v in values.items():
             if v is not None and not math.isfinite(v):
@@ -136,7 +136,7 @@ class ShapeValidator:
     
     @staticmethod
     def validate_mutually_exclusive(group1_name: str, group1_has: bool,
-                                    group2_name: str, group2_has: bool) -> Optional[str]:
+                                    group2_name: str, group2_has: bool) -> str | None:
         """Check that only one of two groups has values. Returns error message or None."""
         if group1_has and group2_has:
             return f"Enter {group1_name} OR {group2_name}, not both"
@@ -144,7 +144,7 @@ class ShapeValidator:
     
     @staticmethod
     def validate_diameter_radius(radius: Any, diameter: Any, 
-                                  default_radius: float = 3.0) -> tuple[float, Optional[str]]:
+                                  default_radius: float = 3.0) -> tuple[float, str | None]:
         """Validate radius/diameter relationship. Returns (radius, error_message)."""
         try:
             r_val = float(radius) if radius not in [None, ""] else None
@@ -190,7 +190,7 @@ class DrawingUtilities:
     @staticmethod
     def draw_right_angle_marker(ctx: "DrawingContext", vertex: "Point",
                                  p1_dir: "Point", p2_dir: "Point",
-                                 size: Optional[float] = None) -> None:
+                                 size: float | None = None) -> None:
         """Draw a right angle marker (small square) at a vertex with global scaling logic."""
         if size is None:
             # Standardized engine scaling: 10% of the minor dimension or 0.3 units fixed
@@ -230,7 +230,7 @@ class DrawingUtilities:
 
     @staticmethod
     def draw_hash_marks(ctx: "DrawingContext", points: list["Point"],
-                       hash_len: Optional[float] = None, count: int = 1) -> None:
+                       hash_len: float | None = None, count: int = 1) -> None:
         """Draw hash marks using consistent context styling."""
         if hash_len is None:
             hash_len = AppConstants.HASH_MARK_LENGTH
@@ -257,7 +257,7 @@ class DrawingUtilities:
 
     
     @staticmethod
-    def dim_offset_from_axes(ax, px: float = None) -> float:
+    def dim_offset_from_axes(ax, px: float | None = None) -> float:
         """Convert a fixed pixel distance to data-coordinate units using current axes state."""
         if px is None:
             px = AppConstants.PRESET_DIM_OFFSET_PX
@@ -575,8 +575,14 @@ class AppConstants:
     })
 
 
-class ShapeFeature:
-    """Feature key constants for ShapeConfig.features dicts."""
+class ShapeFeature(StrEnum):
+    """Feature key constants for ShapeConfig.features dicts.
+
+    Inherits from StrEnum so members compare equal to their string values
+    and can be used directly as dict keys — no .value access needed.
+    Typos at call sites are caught at import time rather than silently
+    returning False from has_feature().
+    """
     FLIP = "reflect"
     ROTATE = "rotate"
     HASH_MARKS = "hash_marks"       # Only implemented for regular polygons (Pentagon, Hexagon, Octagon)
@@ -935,7 +941,7 @@ class GeometricRotation:
 
     @staticmethod
     def compute_angle_from_vertices(old_pts: list, new_pts: list,
-                                     new_base_side: int) -> Optional[float]:
+                                     new_base_side: int) -> float | None:
         """Compute the actual rotation angle from corresponding vertex pairs.
         
         After rotate_polygon_to_base(pts, new_base_side), vertex mapping is:
@@ -970,7 +976,7 @@ class GeometricRotation:
 
     @staticmethod
     def compute_rotation_center(old_pt: tuple, new_pt: tuple,
-                                angle: float) -> Optional[tuple[float, float]]:
+                                angle: float) -> tuple[float, float] | None:
         """Compute the rotation center given that old_pt maps to new_pt under angle.
 
         Solves the 2×2 system:
@@ -1360,7 +1366,6 @@ class DrawingContext:
     dim_args: dict = field(init=False)
     
     def __post_init__(self):
-        self.line_color = "black"
         self.line_args = {
             "edgecolor": "black",
             "facecolor": "none",
@@ -1405,8 +1410,7 @@ class LabelManager:
         # Geometry hints from shape drawers for preset dim line placement
         self.geometry_hints: dict[str, Any] = {}
         # Built-in label selection state (for highlight color)
-        self.circ_selected: bool = False
-        self.builtin_selected: Optional[str] = None
+        self.builtin_selected: str | None = None
         # User-dragged offsets for built-in dim lines {key: (dx, dy)}
         self.custom_dim_offsets: dict[str, tuple[float, float]] = {}
     
@@ -1526,7 +1530,7 @@ class PolygonLabelMixin:
     
     def draw_side_labels(self, points: Polygon, label_keys: list[str],
                          side_aligns: list[tuple[str, str]], 
-                         offsets: Optional[list[float]] = None) -> None:
+                         offsets: list[float] | None = None) -> None:
         """Draw labels for each side of a polygon."""
         if offsets is None:
             offsets = [AppConstants.LABEL_OFFSET_SIDE] * len(label_keys)
@@ -1554,8 +1558,8 @@ class RadialLabelMixin:
     
     def draw_circumference_arc(self, ctx: DrawingContext, center: Point,
                                 radius: float, orientation: str = "horizontal",
-                                label_offset: float = None,
-                                ellipse_ratio: float = None,
+                                label_offset: float | None = None,
+                                ellipse_ratio: float | None = None,
                                 base_position: str = "bottom") -> None:
         """Draw circumference indicator arc with arrowheads pointing away.
 
@@ -1584,8 +1588,8 @@ class RadialLabelMixin:
         if not (txt_c.strip() and show_c):
             return
         
-        arc_color = "#0066cc" if self.label_manager.circ_selected else ctx.line_color
-        arc_lw = AppConstants.DIMENSION_LINE_WIDTH * 1.5 if self.label_manager.circ_selected else AppConstants.DIMENSION_LINE_WIDTH
+        arc_color = "#0066cc" if self.label_manager.builtin_selected == "Circumference" else ctx.line_color
+        arc_lw = AppConstants.DIMENSION_LINE_WIDTH * 1.5 if self.label_manager.builtin_selected == "Circumference" else AppConstants.DIMENSION_LINE_WIDTH
         
         arrow_size = min(0.15, radius * 0.06)  # Scale arrow size with radius
         
@@ -1928,8 +1932,8 @@ class RadialLabelMixin:
     
     def draw_radial_dimension_labels(self, ctx: DrawingContext, radius: float,
                                      base_pos: float, orientation: str = "horizontal",
-                                     label_offset: float = None,
-                                     ellipse_ratio: float = None,
+                                     label_offset: float | None = None,
+                                     ellipse_ratio: float | None = None,
                                      base_position: str = "bottom") -> None:
         if label_offset is None:
             label_offset = AppConstants.LABEL_OFFSET_RADIAL
@@ -2051,7 +2055,7 @@ class ShapeDrawer:
     
     # -------------------- Validation Helpers --------------------
     
-    def validate_positive_params(self, params: dict, keys: list[str]) -> Optional[str]:
+    def validate_positive_params(self, params: dict, keys: list[str]) -> str | None:
         """Validate that all specified parameters are positive if present.
         Returns first error message or None (does NOT raise)."""
         for key in keys:
@@ -2061,7 +2065,7 @@ class ShapeDrawer:
         return None
     
     def validate_pairs_equal(self, params: dict, 
-                             pairs: list[tuple[str, str]]) -> Optional[str]:
+                             pairs: list[tuple[str, str]]) -> str | None:
         """Validate that pairs are equal. Returns first error message or None."""
         for key1, key2 in pairs:
             err = ShapeValidator.validate_equal(
@@ -2079,12 +2083,6 @@ class ShapeDrawer:
             default_radius = AppConstants.CIRCLE_DEFAULT_RADIUS
         r_num = params.get("Radius_num")
         d_num = params.get("Diameter_num")
-        
-        # Reject zero explicitly — 0 is not a valid radius or diameter
-        if r_num is not None and r_num == 0:
-            raise ValidationError("Radius must be positive")
-        if d_num is not None and d_num == 0:
-            raise ValidationError("Diameter must be positive")
         
         # Only validate if user has entered actual numeric values
         # Allow defaults/empty values to pass through without error
@@ -2125,8 +2123,8 @@ class ShapeDrawer:
             buffer = AppConstants.SMART_LABEL_BUFFER
         return self.label_manager.get_smart_label_pos(p1, p2, centroid, buffer)
     
-    def transform_points(self, points: Polygon, center: Optional[Point] = None,
-                         transform: Optional[TransformState] = None) -> Polygon:
+    def transform_points(self, points: Polygon, center: Point | None = None,
+                         transform: TransformState | None = None) -> Polygon:
         """Apply flip transforms to points."""
         if not points:
             return points
@@ -2214,13 +2212,21 @@ class ShapeDrawer:
     def draw_line(self, ctx: DrawingContext, p1: Point, p2: Point,
                   dashed: bool = False) -> None:
         if dashed:
-            style = {**ctx.dim_args, "linestyle": "--"}
+            style = ctx.dash_args
         else:
             style = {"color": ctx.line_color, "lw": AppConstants.DEFAULT_LINE_WIDTH}
         ctx.ax.plot([p1[0], p2[0]], [p1[1], p2[1]], **style)
 
     def draw_dim_line(self, ctx: DrawingContext, key: str, p1: Point, p2: Point) -> None:
-        """Draw a dashed dimension line that highlights blue when its label is selected."""
+        """Draw a dashed dimension line that highlights blue when its label is selected.
+
+        Args:
+            ctx: Drawing context (provides axes and line color).
+            key: The label key this dim line belongs to (e.g. "Height", "Radius").
+                 Used to look up any user-dragged offset and to check selection state.
+            p1: Start point in data coordinates (before drag offset is applied).
+            p2: End point in data coordinates (before drag offset is applied).
+        """
         dx, dy = self.label_manager.custom_dim_offsets.get(key, (0.0, 0.0))
         p1 = (p1[0] + dx, p1[1] + dy)
         p2 = (p2[0] + dx, p2[1] + dy)
@@ -2236,9 +2242,23 @@ class ShapeDrawer:
                                p1: Point, p2: Point,
                                label_x: float, label_y: float,
                                label_ha: str = "center", label_va: str = "center") -> None:
-        """Draw a dimension line with endpoint dots and positioned label.
-        Checks visibility via label_manager; draws nothing if label is hidden.
-        Applies custom_dim_offsets so dots and label stay with the line when dragged."""
+        """Draw a dimension line with endpoint dots and a positioned label.
+
+        Checks visibility via label_manager; draws nothing if the label is hidden
+        or has no text.  Applies custom_dim_offsets so the dots and label move
+        together with the line when the user drags it.
+
+        Args:
+            ctx: Drawing context.
+            key: Label key (e.g. "Height", "Radius") — drives visibility check,
+                 selection highlight, and drag-offset lookup.
+            p1: First endpoint of the dimension line (before drag offset).
+            p2: Second endpoint of the dimension line (before drag offset).
+            label_x: Default label X position in data coordinates (before drag offset).
+            label_y: Default label Y position in data coordinates (before drag offset).
+            label_ha: Horizontal alignment of the label text ("left"/"center"/"right").
+            label_va: Vertical alignment of the label text ("top"/"center"/"bottom").
+        """
         text, show = self.label_manager.get_entry_values(key)
         if not (text and show):
             return
@@ -2253,13 +2273,25 @@ class ShapeDrawer:
                     color=ctx.line_color)
     
     def draw_hash_marks(self, ctx: DrawingContext, points: Polygon,
-                        hash_len: Optional[float] = None, count: int = 1) -> None:
-        """Convenience wrapper around DrawingUtilities.draw_hash_marks."""
+                        hash_len: float | None = None, count: int = 1) -> None:
+        """Draw tick marks perpendicular to each segment of *points*.
+
+        Convenience wrapper around DrawingUtilities.draw_hash_marks.
+
+        Args:
+            ctx: Drawing context (provides axes and line color).
+            points: List of 2-D points defining the segment(s) to mark.
+                    Each consecutive pair (points[i], points[i+1]) receives marks.
+            hash_len: Length of each tick in data units.
+                      Defaults to AppConstants.HASH_MARK_LENGTH when None.
+            count: Number of parallel ticks to draw per segment (1 = single mark,
+                   2 = double, etc.).  Used to indicate congruence groups.
+        """
         DrawingUtilities.draw_hash_marks(ctx, points, hash_len, count)
 
     def draw_right_angle_marker(self, ctx: DrawingContext, vertex: Point,
                                  p1_dir: Point, p2_dir: Point,
-                                 size: Optional[float] = None) -> None:
+                                 size: float | None = None) -> None:
         """Convenience wrapper around DrawingUtilities.draw_right_angle_marker."""
         DrawingUtilities.draw_right_angle_marker(ctx, vertex, p1_dir, p2_dir, size)
 
@@ -2280,7 +2312,14 @@ class ShapeDrawer:
         return items[positions:] + items[:positions]
     
     def rotate_polygon_to_base(self, points: Polygon, base_side: int) -> Polygon:
-        """Rotate polygon so specified side becomes the base (bottom)."""
+        """Rotate polygon so the specified side becomes the base (bottom).
+
+        The result is always normalised so that (min_x, min_y) == (0, 0).
+        This is correct for standalone shape drawing where the absolute position
+        is irrelevant, but it DESTROYS position information.  Do NOT use this
+        method for shapes that are already placed at a specific position in a
+        composite canvas — the normalisation would move them to the origin.
+        """
         if base_side == 0:
             return points
         
@@ -2333,11 +2372,11 @@ class TransformController:
     
     def __init__(
         self,
-        on_change_callback: callable,
-        flip_h_btn: Optional[tk.Button] = None,
-        flip_v_btn: Optional[tk.Button] = None,
-        rotate_ccw_btn: Optional[tk.Button] = None,
-        rotate_cw_btn: Optional[tk.Button] = None
+        on_change_callback: Callable[[], None],
+        flip_h_btn: tk.Button | None = None,
+        flip_v_btn: tk.Button | None = None,
+        rotate_ccw_btn: tk.Button | None = None,
+        rotate_cw_btn: tk.Button | None = None
     ):
         self.on_change_callback = on_change_callback
 
@@ -2393,7 +2432,7 @@ class InputController:
     """Handles input field creation and management."""
 
     def __init__(self, input_frame: tk.Frame, label_manager: LabelManager,
-                 on_change_callback: callable):
+                 on_change_callback: Callable[[], None]):
         self.input_frame = input_frame
         self.label_manager = label_manager
         self.on_change_callback = on_change_callback
@@ -2576,8 +2615,8 @@ class CompositeTransferList(tk.Frame):
     INTERNAL_NAMES: dict[str, str] = {v: k for k, v in DISPLAY_NAMES.items()}
 
     def __init__(self, parent: tk.Frame, available_shapes: list[str],
-                 on_change_callback: callable,
-                 on_before_change_callback: callable = None, **kwargs):
+                 on_change_callback: Callable[..., None],
+                 on_before_change_callback: Callable[..., None] | None = None, **kwargs):
         super().__init__(parent, bg=AppConstants.BG_COLOR, **kwargs)
         self.available_shapes = list(available_shapes)
         self.on_change_callback = on_change_callback
@@ -2768,7 +2807,7 @@ class PlotController:
             spine.set_linewidth(1.0)
     
     def draw_shape(self, shape: str, ctx: DrawingContext, 
-                   transform: TransformState, params: dict) -> Optional[str]:
+                   transform: TransformState, params: dict) -> str | None:
         """
         Draw a shape using the registry.
         Returns error message if drawing failed, None on success.
@@ -2808,7 +2847,7 @@ class PlotController:
 class ShapeRegistry:
     """Registry for shape drawer classes using a simple factory pattern."""
     
-    _drawers: dict[str, type] = {}
+    _drawers: dict[str, type[ShapeDrawer]] = {}
     
     @classmethod
     def register(cls, shape_name: str):
@@ -2819,7 +2858,7 @@ class ShapeRegistry:
         return decorator
     
     @classmethod
-    def get_drawer(cls, shape_name: str, deps: DrawingDependencies) -> Optional[ShapeDrawer]:
+    def get_drawer(cls, shape_name: str, deps: DrawingDependencies) -> ShapeDrawer | None:
         """Get a new drawer instance for a shape, or None if not registered."""
         if shape_name not in cls._drawers:
             return None
@@ -3057,7 +3096,7 @@ class TriangleDrawer(ShapeDrawer):
     def _draw_triangle_common(self, ctx: DrawingContext, transform: TransformState,
                                base_pts: Polygon, label_keys: list[str], 
                                show_height: bool = False,
-                               equal_sides: Optional[list[int]] = None,
+                               equal_sides: list[int] | None = None,
                                padding: float = 1.0,
                                height_label_key: str = "Height") -> Polygon:
         xs = [p[0] for p in base_pts]
@@ -4254,7 +4293,7 @@ class AdjustableAngleDrawer(ShapeDrawer, ArrowMixin):
     
     def _draw_angle_arc(self, ctx: DrawingContext, center: Point, radius: float,
                         start_angle: float, end_angle: float, 
-                        label_key: Optional[str] = None) -> None:
+                        label_key: str | None = None) -> None:
         arc = patches.Arc(center, radius * 2, radius * 2,
                           theta1=start_angle, theta2=end_angle,
                           ec=ctx.line_color, lw=AppConstants.DEFAULT_LINE_WIDTH)
@@ -4414,7 +4453,7 @@ class HistoryManager:
         self._is_restoring = value
 
     @contextlib.contextmanager
-    def restoring(self):
+    def restoring(self) -> Iterator[None]:
         """Context manager that sets is_restoring=True for the duration of the block.
 
         Guarantees the flag is cleared even if an exception occurs, preventing
@@ -4461,7 +4500,7 @@ class HistoryManager:
         except Exception:
             return False
 
-    def undo(self, _=None) -> Optional[dict]:
+    def undo(self, _=None) -> dict | None:
         if len(self.undo_stack) == 0:
             return None
 
@@ -4474,7 +4513,7 @@ class HistoryManager:
             return self.undo_stack[-1]
         return None
 
-    def redo(self, _=None) -> Optional[dict]:
+    def redo(self, _=None) -> dict | None:
         if not self.redo_stack:
             return None
             
@@ -4549,17 +4588,17 @@ class CompositeDragController:
         self.selected: set[int] = set()
         # Label / annotation state
         self.labels: list[dict] = []
-        self.label_drag: Optional[dict] = None
-        self.selected_label: Optional[int] = None
+        self.label_drag: dict | None = None
+        self.selected_label: int | None = None
         # Dim line state
         self.dim_lines: list[CompositeDimLine] = []
-        self.selected_dim: Optional[int] = None
-        self.dim_mode: Optional[str] = None
-        self.dim_first_point: Optional[tuple] = None
-        self.edit_mode: Optional[dict] = None
+        self.selected_dim: int | None = None
+        self.dim_mode: str | None = None
+        self.dim_first_point: tuple | None = None
+        self.edit_mode: dict | None = None
         # Drag / marquee state
-        self.drag_state: Optional[dict] = None
-        self.marquee: Optional[dict] = None
+        self.drag_state: dict | None = None
+        self.marquee: dict | None = None
         self.snap_guides: list = []
 
     # ── Event connection ──────────────────────────────────────────────────────
@@ -5215,7 +5254,7 @@ class CompositeDragController:
     def get_group_center(self) -> tuple[float, float]:
         """Calculate the center of all selected shapes' bounding boxes."""
         app = self.app
-        if not self.selected or not app._composite_bboxes is not None:
+        if not self.selected or app._composite_bboxes is None:
             return (0.0, 0.0)
         xs, ys = [], []
         for idx in self.selected:
@@ -5231,7 +5270,7 @@ class CompositeDragController:
     def get_group_bbox(self) -> tuple[float, float, float, float]:
         """Get the bounding box encompassing all selected shapes."""
         app = self.app
-        if not self.selected or not app._composite_bboxes is not None:
+        if not self.selected or app._composite_bboxes is None:
             return (0, 0, 0, 0)
         x_mins, y_mins, x_maxs, y_maxs = [], [], [], []
         for idx in self.selected:
@@ -5416,7 +5455,7 @@ class CompositeDragController:
     def add_label(self) -> None:
         """Add a custom label to the composite canvas."""
         app = self.app
-        if not app._composite_label_entry is not None:
+        if app._composite_label_entry is None:
             return
         text = app._composite_label_entry.get().strip()
         if not text:
@@ -5484,7 +5523,7 @@ class CompositeDragController:
         app = self.app
         if self.edit_mode is None:
             return
-        if not app._composite_label_entry is not None:
+        if app._composite_label_entry is None:
             return
         new_text = app._composite_label_entry.get().strip()
         if not new_text:
@@ -5859,20 +5898,20 @@ class StandaloneAnnotationController:
         self.app = app
         # Annotation data
         self.labels: list[dict] = []               # [{"text": str, "x": float, "y": float}]
-        self.selected_label: Optional[int] = None
+        self.selected_label: int | None = None
         self.label_bboxes: list[tuple] = []
         self.dim_lines: list[StandaloneDimLine] = []
-        self.selected_dim: Optional[int] = None
+        self.selected_dim: int | None = None
         self.dim_endpoints: list[dict] = []
         self.dim_label_bboxes: list[tuple] = []
         self.dim_mode: bool = False
-        self.dim_first_point: Optional[tuple] = None
+        self.dim_first_point: tuple | None = None
         self.dim_preview_line = None
-        self.edit_mode: Optional[dict] = None      # {"type": "label"/"dim"/"builtin", "idx": int}
+        self.edit_mode: dict | None = None      # {"type": "label"/"dim"/"builtin", "idx": int}
         # Shared drag/hover state (also used by composite path — kept on app)
         # We access app._label_drag_state, app._label_hover_active directly.
         # Builtin selection state
-        self.builtin_selected: Optional[str] = None
+        self.builtin_selected: str | None = None
         self.builtin_dim_endpoints: list[dict] = []  # [{key, p1, p2}] populated per render
 
     # ── Event connection ──────────────────────────────────────────────────────
@@ -5915,7 +5954,7 @@ class StandaloneAnnotationController:
         pad_y = px * data_h / ax_px_h if ax_px_h > 0 else 0.1
         return pad_x, pad_y
 
-    def find_nearest_label(self, x: float, y: float, threshold: float = 0.8) -> Optional[str]:
+    def find_nearest_label(self, x: float, y: float, threshold: float = 0.8) -> str | None:
         """Find the nearest built-in label key to the given data coordinates."""
         app = self.app
         if not app.label_manager.auto_positions:
@@ -6419,7 +6458,7 @@ class StandaloneAnnotationController:
     def add_label(self) -> None:
         """Add a freeform text label to the standalone canvas."""
         app = self.app
-        if not app._standalone_label_entry is not None:
+        if app._standalone_label_entry is None:
             return
         text = app._standalone_label_entry.get().strip()
         if not text:
@@ -6607,7 +6646,7 @@ class StandaloneAnnotationController:
         app = self.app
         if self.edit_mode is None:
             return
-        if not app._standalone_label_entry is not None:
+        if app._standalone_label_entry is None:
             return
         new_text = app._standalone_label_entry.get().strip()
         if not new_text:
@@ -6684,9 +6723,9 @@ class GeometryApp:
         self.font_size = AppConstants.DEFAULT_FONT_SIZE
         self.line_width = AppConstants.DEFAULT_LINE_WIDTH
         self.font_family = AppConstants.DEFAULT_FONT_FAMILY
-        self._redraw_after_id: Optional[str] = None
-        self._slider_after_id: Optional[str] = None
-        self._capture_after_id: Optional[str] = None
+        self._redraw_after_id: str | None = None
+        self._slider_after_id: str | None = None
+        self._capture_after_id: str | None = None
         # Composite drag controller — owns positions, transforms, selection,
         # labels, dim_lines, drag/marquee state, snap, and all action methods.
         # Instantiated after label_manager / history_manager (below).
@@ -6696,13 +6735,13 @@ class GeometryApp:
         # Instantiated after label_manager / history_manager (below) because
         # __init__ only captures a reference to self (app).
         # Accessed as self.standalone_ctrl; backward-compat delegates kept below.
-        self._shape_bounds: Optional[dict] = None
+        self._shape_bounds: dict | None = None
         self._standalone_event_ids: list[int] = []
         self._composite_event_ids: list[int] = []
-        self._label_drag_state: Optional[dict] = None
+        self._label_drag_state: dict | None = None
         self._label_hover_active: bool = False
         self._shape_pan_offset: tuple[float, float] = (0.0, 0.0)  # data-unit pan offset
-        self._scale_after_id: Optional[str] = None
+        self._scale_after_id: str | None = None
         self.label_manager = LabelManager()
         self.history_manager = HistoryManager()
         # Controllers must be instantiated AFTER label_manager / history_manager
@@ -7036,7 +7075,7 @@ class GeometryApp:
     def _pixels_to_data_pad(self, px: float) -> tuple[float, float]:
         return self.standalone_ctrl.pixels_to_data_pad(px)
 
-    def _find_nearest_label(self, x: float, y: float, threshold: float = 0.8) -> Optional[str]:
+    def _find_nearest_label(self, x: float, y: float, threshold: float = 0.8) -> str | None:
         return self.standalone_ctrl.find_nearest_label(x, y, threshold)
 
     def _on_standalone_label_hover(self, event) -> None:
@@ -7075,7 +7114,7 @@ class GeometryApp:
     def _cancel_standalone_edit(self) -> None:
         self.standalone_ctrl.cancel_edit()
 
-    def _get_preset_value_key(self, preset_key: str) -> Optional[str]:
+    def _get_preset_value_key(self, preset_key: str) -> str | None:
         """Map a dim line preset key to the Custom mode entry key for value population."""
         shape = self.shape_var.get()
         tri_type = self.triangle_type_var.get()
@@ -7578,7 +7617,7 @@ class GeometryApp:
         num_sides = config.num_sides if config.num_sides > 0 else 4
         self._rotate_with_annotations(shape, direction, num_sides, config)
     
-    def _get_shape_center(self) -> Optional[tuple[float, float]]:
+    def _get_shape_center(self) -> tuple[float, float] | None:
         """Return the geometry-only center of the current shape, or None.
         
         Uses _pre_rotation_center (computed from Polygon/Line2D/Arc artists only,
@@ -7792,7 +7831,7 @@ class GeometryApp:
         if not self.history_manager.is_restoring:
             self._capture_current_state(force=True)
 
-    def _update_rotation_label(self, config: Optional[ShapeConfig] = None) -> None:
+    def _update_rotation_label(self, config: ShapeConfig | None = None) -> None:
         """Update rotation state label based on current shape and base_side."""
         if config is None:
             shape = self.shape_var.get()
@@ -7998,7 +8037,7 @@ class GeometryApp:
             except ValueError:
                 self.font_size_var.set(self.font_size)
         except tk.TclError as e:
-            logger.debug(f"Spinbox update failed (likely widget destroyed): {e}")
+            logger.debug("Spinbox update failed (likely widget destroyed): %s", e)
 
     def _set_font_sans(self) -> None:
         self.font_family = "sans-serif"
@@ -8044,7 +8083,7 @@ class GeometryApp:
             except ValueError:
                 self.line_width_var.set(self.line_width)
         except tk.TclError as e:
-            logger.debug(f"Line width spinbox update failed (likely widget destroyed): {e}")
+            logger.debug("Line width spinbox update failed (likely widget destroyed): %s", e)
 
     def show_welcome(self) -> None:
         # Keep only Category (cols 0,1) and Shape (cols 2,3) visible in top bar
@@ -8085,7 +8124,7 @@ class GeometryApp:
         try:
             self.root.after_cancel(after_id)
         except tk.TclError as e:
-            logger.debug(f"Could not cancel after callback {attr_name}: {e}")
+            logger.debug("Could not cancel after callback %s: %s", attr_name, e)
         finally:
             setattr(self, attr_name, None)
     
@@ -8145,7 +8184,7 @@ class GeometryApp:
 
     def _update_triangle_button_styles(self) -> None:
         """Highlight active triangle button using standardized active state colors."""
-        if not self.tri_buttons is not None:
+        if self.tri_buttons is None:
             return
         current = self.triangle_type_var.get()
         for name, btn in self.tri_buttons.items():
@@ -8154,7 +8193,7 @@ class GeometryApp:
             else:
                 btn.config(relief="raised", bg=AppConstants.BG_COLOR, fg="gray")
 
-    def on_triangle_type_change(self, event: Optional[Any] = None) -> None:
+    def on_triangle_type_change(self, event: Any | None = None) -> None:
         if not self.history_manager.is_restoring:
             self._capture_current_state()
         self.scale_manager.reset("peak_offset")
@@ -8418,7 +8457,6 @@ class GeometryApp:
                     else:
                         self.label_manager.label_texts.pop(lbl_key, None)
                         self.label_manager.label_visibility.pop(lbl_key, None)
-                self.label_manager.circ_selected = False
 
             t = state.get("transforms", {"h": False, "v": False, "side": 0})
             self.transform_controller.flip_h, self.transform_controller.flip_v = t["h"], t["v"]
@@ -8459,12 +8497,14 @@ class GeometryApp:
         # Include all scales (including view_scale) in history so undo restores zoom/pan
         scales_to_save = {k: self.scale_manager.var(k).get() for k in self.scale_manager.specs}
         
+        # Compute once — result is constant for the lifetime of this method
+        is_composite = self._is_composite_shape(self.shape_var.get())
+
         # Capture composite transfer list contents only for composite shapes
         composite_selected = []
         composite_positions = {}
         composite_transforms = {}
-        if (self._is_composite_shape(self.shape_var.get())
-                and self.composite_transfer is not None):
+        if is_composite and self.composite_transfer is not None:
             composite_selected = self.composite_transfer.get_selected_shapes()
             composite_positions = dict(self._composite_positions)
             composite_transforms = {k: dict(v) for k, v in self._composite_transforms.items()}
@@ -8490,11 +8530,11 @@ class GeometryApp:
             "composite_shapes": composite_selected,
             "composite_positions": composite_positions,
             "composite_transforms": composite_transforms,
-            "composite_labels": [dict(lbl) for lbl in self._composite_labels] if self._is_composite_shape(self.shape_var.get()) else [],
-            "composite_dim_lines": [dict(d) for d in self._composite_dim_lines] if self._is_composite_shape(self.shape_var.get()) else [],
+            "composite_labels": [dict(lbl) for lbl in self._composite_labels] if is_composite else [],
+            "composite_dim_lines": [dict(d) for d in self._composite_dim_lines] if is_composite else [],
             "show_hashmarks": self.show_hashmarks_var.get() if hasattr(self, 'show_hashmarks_var') else False,
-            "standalone_labels": [dict(lbl) for lbl in self._standalone_labels] if not self._is_composite_shape(self.shape_var.get()) else [],
-            "standalone_dim_lines": [dict(d) for d in self._standalone_dim_lines] if not self._is_composite_shape(self.shape_var.get()) else [],
+            "standalone_labels": [dict(lbl) for lbl in self._standalone_labels] if not is_composite else [],
+            "standalone_dim_lines": [dict(d) for d in self._standalone_dim_lines] if not is_composite else [],
             "view_pan": list(getattr(self, '_shape_pan_offset', (0.0, 0.0))),
             **{
                 f"{st_key}_text": self.label_manager.label_texts.get(lbl_key, "")
@@ -8614,7 +8654,7 @@ class GeometryApp:
 
     def _update_polygon_button_styles(self) -> None:
         """Highlight active polygon type button."""
-        if not self.poly_buttons is not None:
+        if self.poly_buttons is None:
             return
         current = self.polygon_type_var.get()
         for name, btn in self.poly_buttons.items():
@@ -8632,7 +8672,7 @@ class GeometryApp:
             self._schedule_delayed_capture()
 
     # --------------------------------------------------
-    def update_shape_list(self, _: Optional[Any] = None) -> None:
+    def update_shape_list(self, _: Any | None = None) -> None:
         # Capture outgoing shape state (label moves, input changes, etc.)
         if self.shape_var.get() and not self.history_manager.is_restoring:
             self._capture_current_state()
@@ -8731,7 +8771,7 @@ class GeometryApp:
             self._show_help_text(config.help_text)
             self._pack_right_panel(show_help=True)
     
-    def update_inputs(self, _: Optional[Any] = None) -> None:
+    def update_inputs(self, _: Any | None = None) -> None:
 
         if self.center_container is not None:
             # Re-show all controls in the top bar
@@ -9603,7 +9643,7 @@ class GeometryApp:
     # _DIM_DISPATCH (built lazily on first call to avoid forward-reference issues).
     # ------------------------------------------------------------------
 
-    def _calc_dim_line_endpoints(self, preset_key: str) -> Optional[dict]:
+    def _calc_dim_line_endpoints(self, preset_key: str) -> dict | None:
         """Dispatch to a per-preset calculator.
 
         Uses _shape_bounds captured during generate_plot (tight bounds before
@@ -10527,8 +10567,8 @@ class GeometryApp:
                 aspect_ratio=self.scale_manager.var("aspect").get()
             )
 
-            self.label_manager.circ_selected = getattr(self, '_builtin_selected', None) == "Circumference"
-            self.label_manager.builtin_selected = getattr(self, '_builtin_selected', None)
+            _builtin_sel = self._builtin_selected
+            self.label_manager.builtin_selected = _builtin_sel
             
             transform = self._create_transform_state()
             params = self._collect_shape_params()
@@ -10560,8 +10600,9 @@ class GeometryApp:
             _xlim = self.ax.get_xlim()
             _ylim = self.ax.get_ylim()
             _canonical_center = ((_xlim[0] + _xlim[1]) / 2, (_ylim[0] + _ylim[1]) / 2)
+            # Single assignment; _pre_rotation_center is an alias for the same value.
             self._canonical_pre_rotation_center = _canonical_center
-            self._pre_rotation_center = _canonical_center
+            self._pre_rotation_center = self._canonical_pre_rotation_center
 
             if is_unified_rotate and not error:
                 config = ShapeConfigProvider.get(shape)
@@ -10748,7 +10789,7 @@ class GeometryApp:
         """Extract polygon points from geometry hints and draw smart hashmarks."""
         hints = self.label_manager.geometry_hints
         shape = self.shape_var.get()
-        points: Optional[list] = None
+        points: list | None = None
 
         if shape == "Triangle":
             # Use the stored triangle vertices from geometry hints
