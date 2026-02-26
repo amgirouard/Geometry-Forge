@@ -610,11 +610,6 @@ class ShapeConfig:
         """Check if shape has a specific feature. Use ShapeFeature constants."""
         return self.features.get(feature, False)
 
-    # Named helpers delegate to has_feature — single point of truth.
-    def has_flip(self) -> bool:
-        return self.has_feature(ShapeFeature.FLIP)
-
-
 def _build_shape_configs() -> dict[str, "ShapeConfig"]:
     """Build and return the complete shape configuration mapping.
 
@@ -5095,7 +5090,6 @@ class CompositeDragController:
                     self.selected.clear()
                     self.update_selection_ui()
                     app.generate_plot()
-            app.canvas.draw_idle()
             return
 
         if self.drag_state is None:
@@ -7429,12 +7423,12 @@ class GeometryApp:
     def _get_shape_center(self) -> Optional[tuple[float, float]]:
         """Return the geometry-only center of the current shape, or None.
         
-        Uses _geometry_center (computed from Polygon/Line2D/Arc artists only,
+        Uses _pre_rotation_center (computed from Polygon/Line2D/Arc artists only,
         excluding Text) to match the exact pivot used by rotate_axes_artists.
         This prevents annotation drift caused by text labels extending the
         bounding box asymmetrically.
         """
-        gc = getattr(self, '_geometry_center', None)
+        gc = getattr(self, '_pre_rotation_center', None)
         if gc is not None:
             return gc
         b = getattr(self, '_shape_bounds', None)
@@ -7510,7 +7504,7 @@ class GeometryApp:
         # ── Steps 4-6: compute angle, rotate all annotations, final redraw ───
         if has_annotations and old_center is not None:
             # The shape is always redrawn from scratch in canonical orientation
-            # then rotated around _canonical_geometry_center by the cumulative angle.
+            # then rotated around _canonical_pre_rotation_center by the cumulative angle.
             # Annotations must rotate around the SAME fixed pivot by the step angle.
             # No shift is needed because rotation is a rigid transform: if both
             # shape vertices and annotation coords rotate around the same center,
@@ -7521,7 +7515,7 @@ class GeometryApp:
             # The annotation coords already live in the flipped-and-previously-
             # rotated visual space, so we must negate the step angle to keep them
             # in sync with the shape body which is drawn canonical→rotate→flip.
-            canonical = getattr(self, '_canonical_geometry_center', None)
+            canonical = getattr(self, '_canonical_pre_rotation_center', None)
             if canonical is not None:
                 pivot = canonical
             else:
@@ -9574,7 +9568,11 @@ class GeometryApp:
         offset = DrawingUtilities.dim_offset_from_axes(self.ax)
         label_gap = DrawingUtilities.dim_label_gap_from_axes(self.ax)
 
-        # Build dispatch table once per instance (avoids forward-ref problems)
+        # Build dispatch table once per instance on first call.
+        # Safe to cache permanently: all values are bound methods on `self`,
+        # so they always reflect the current instance state. The shape-specific
+        # _calc_dim_* methods exist by the time __init__ finishes, so no
+        # partial-object risk in production. No invalidation needed.
         if not hasattr(self, '_dim_dispatch'):
             self._dim_dispatch = {
                 "height":       self._calc_dim_height,
@@ -10513,8 +10511,8 @@ class GeometryApp:
             _xlim = self.ax.get_xlim()
             _ylim = self.ax.get_ylim()
             _canonical_center = ((_xlim[0] + _xlim[1]) / 2, (_ylim[0] + _ylim[1]) / 2)
-            self._canonical_geometry_center = _canonical_center
-            self._geometry_center = _canonical_center
+            self._canonical_pre_rotation_center = _canonical_center
+            self._pre_rotation_center = _canonical_center
 
             if is_unified_rotate and not error:
                 config = ShapeConfigProvider.get(shape)
@@ -10523,13 +10521,7 @@ class GeometryApp:
                 # Step 2: rotate around the geometry center
                 if actual_base_side != 0:
                     angle_deg = -(360.0 / num_sides) * actual_base_side
-                    if self._geometry_center:
-                        cx, cy = self._geometry_center
-                    else:
-                        xlim = self.ax.get_xlim()
-                        ylim = self.ax.get_ylim()
-                        cx = (xlim[0] + xlim[1]) / 2
-                        cy = (ylim[0] + ylim[1]) / 2
+                    cx, cy = self._pre_rotation_center
                     GeometricRotation.rotate_axes_artists(self.ax, angle_deg, cx, cy)
                     GeometricRotation.recalculate_limits(self.ax)
                     self._rotate_geometry_hints(math.radians(angle_deg), cx, cy)
@@ -10551,7 +10543,7 @@ class GeometryApp:
                     self._flip_center = (cx, cy)
                 else:
                     # No flip: use canonical center (annotations will pivot here)
-                    self._flip_center = self._canonical_geometry_center
+                    self._flip_center = self._canonical_pre_rotation_center
             
             # Draw smart hashmarks if enabled
             if (getattr(self, 'show_hashmarks_var', None) is not None
@@ -10890,7 +10882,7 @@ class GeometryApp:
                 self._composite_flip_v()
             return
         config = ShapeConfigProvider.get(self.shape_var.get())
-        if config.has_flip():
+        if config.has_feature(ShapeFeature.FLIP):
             self._flip_with_annotations(axis)
 
 
@@ -10927,19 +10919,10 @@ if __name__ == "__main__":
 
 
 # ================== REFACTOR ROADMAP ======================================
-# Last completed: Batch 7 (dead code purge) — all tests passed.
-# Versioning in Git — no version numbers in source.
-
-# BATCH 8 — Targeted Single-Line Fixes  [NEXT]
-#
-#   B1  Normalize has_flip() → has_feature(ShapeFeature.FLIP) everywhere (1 call site at ~line 11065); delete has_flip
-#   B3  Delete dead else branch in generate_plot rotation path (lines ~10700–10704); flatten to: cx, cy = self._geometry_center
-#   B5  Remove redundant canvas.draw_idle() after generate_plot() at lines ~5259 and ~6287 (keep line ~5182)
-#   B6  Add comment to _calc_dim_line_endpoints explaining why _dim_dispatch never needs invalidation
-#   C5  Rename _geometry_center → _pre_rotation_center throughout for clarity
+# Last completed: Batch 8 (targeted fixes) — all tests passed.
 
 # ---
-# BATCH 9 — Composite Method Relocation  [PLANNED]
+# BATCH 9 — Composite Method Relocation  [NEXT]
 #
 #   C1  Move _on_composite_change + _on_composite_delete into CompositeDragController
 #       as on_change(operation) and on_delete(event); leave one-liner delegates on GeometryApp
@@ -10955,6 +10938,3 @@ if __name__ == "__main__":
 #
 #   C2  State snapshot delegation: each controller exposes get_state()/set_state(); _build_state_snapshot delegates
 #   C3  Split generate_plot into _generate_composite_plot() / _generate_standalone_plot() / _apply_transform_pipeline()
-#   C6  [formerly B6] _dim_dispatch comment already added in Batch 8
-
-# ---
