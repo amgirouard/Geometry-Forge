@@ -14,7 +14,7 @@ import platform
 import os
 import logging
 from io import BytesIO
-
+  
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 from matplotlib.axes import Axes
