@@ -4692,6 +4692,2025 @@ def capture_state(func):
     return wrapper
 
 
+class CompositeDragController:
+    """Manages drag, selection, snap, and annotation state for composite shapes.
+
+    Owns all composite-specific state (positions, transforms, selection, labels,
+    dim lines, drag/marquee state, snap guides) and the three mouse-event handlers
+    plus all composite action methods (flip, rotate, delete, dim line placement).
+
+    Calls back into GeometryApp via self.app for shared resources (canvas, ax,
+    history_manager, generate_plot, root, composite_transfer, etc.).
+
+    Instantiated as self.composite_ctrl in GeometryApp.__init__.
+    GeometryApp retains thin @property aliases for all state attrs and one-liner
+    delegate methods for all moved methods.
+    """
+
+    def __init__(self, app: "GeometryApp") -> None:
+        self.app = app
+        # Shape placement state
+        self.positions: dict[int, tuple[float, float]] = {}
+        self.transforms: dict[int, dict] = {}
+        self.selected: set[int] = set()
+        # Label / annotation state
+        self.labels: list[dict] = []
+        self.label_drag: Optional[dict] = None
+        self.selected_label: Optional[int] = None
+        # Dim line state
+        self.dim_lines: list[CompositeDimLine] = []
+        self.selected_dim: Optional[int] = None
+        self.dim_mode: Optional[str] = None
+        self.dim_first_point: Optional[tuple] = None
+        self.edit_mode: Optional[dict] = None
+        # Drag / marquee state
+        self.drag_state: Optional[dict] = None
+        self.marquee: Optional[dict] = None
+        self.snap_guides: list = []
+
+    # ── Event connection ──────────────────────────────────────────────────────
+
+    def connect(self) -> None:
+        """Connect mouse events for composite shape dragging."""
+        self.disconnect()
+        self.app._composite_event_ids = [
+            self.app.canvas.mpl_connect('button_press_event', self.on_press),
+            self.app.canvas.mpl_connect('motion_notify_event', self.on_motion),
+            self.app.canvas.mpl_connect('button_release_event', self.on_release),
+        ]
+
+    def disconnect(self) -> None:
+        """Disconnect composite drag mouse events."""
+        for eid in self.app._composite_event_ids:
+            try:
+                self.app.canvas.mpl_disconnect(eid)
+            except Exception:
+                pass
+        self.app._composite_event_ids = []
+        self.drag_state = None
+        self.marquee = None
+
+    # ── Mouse event handlers ──────────────────────────────────────────────────
+
+    def on_press(self, event) -> None:
+        """Handle mouse press in composite mode."""
+        app = self.app
+        if event.inaxes != app.ax or event.button != 1:
+            return
+        if not app._is_composite_shape():
+            return
+        if not hasattr(app, '_composite_bboxes') or not app._composite_bboxes:
+            return
+        mx, my = event.xdata, event.ydata
+        if mx is None or my is None:
+            return
+
+        # Double-click → enter edit mode
+        if getattr(event, 'dblclick', False):
+            if hasattr(app, '_composite_dim_label_bboxes'):
+                for idx in reversed(range(len(app._composite_dim_label_bboxes))):
+                    bbox = app._composite_dim_label_bboxes[idx]
+                    if bbox[0] <= mx <= bbox[2] and bbox[1] <= my <= bbox[3]:
+                        self.enter_edit("dim", idx)
+                        return
+            if hasattr(app, '_composite_label_bboxes'):
+                for idx in reversed(range(len(app._composite_label_bboxes))):
+                    bbox = app._composite_label_bboxes[idx]
+                    if bbox[0] <= mx <= bbox[2] and bbox[1] <= my <= bbox[3]:
+                        self.enter_edit("label", idx)
+                        return
+
+        # Dim placement mode
+        if self.dim_mode is not None:
+            if self.handle_dim_click(mx, my):
+                return
+
+        # Dim endpoint hit
+        if hasattr(app, '_composite_dim_endpoints'):
+            for idx, endpoints in enumerate(app._composite_dim_endpoints):
+                for ep_key in ("p1", "p2"):
+                    if ep_key not in endpoints:
+                        continue
+                    ex, ey = endpoints[ep_key]
+                    if abs(mx - ex) < 0.5 and abs(my - ey) < 0.5:
+                        self.label_drag = {
+                            "type": "dim_endpoint",
+                            "idx": idx,
+                            "endpoint": ep_key,
+                            "start_x": mx, "start_y": my,
+                            "orig_x": ex, "orig_y": ey,
+                            "dragged": False
+                        }
+                        self.selected_dim = idx
+                        self.selected_label = None
+                        self.selected.clear()
+                        if not app.history_manager.is_restoring:
+                            app._capture_current_state()
+                        app.root.config(cursor="fleur")
+                        return
+
+        # Dim line label hit
+        if hasattr(app, '_composite_dim_label_bboxes'):
+            for idx in reversed(range(len(app._composite_dim_label_bboxes))):
+                bbox = app._composite_dim_label_bboxes[idx]
+                if bbox[0] <= mx <= bbox[2] and bbox[1] <= my <= bbox[3]:
+                    dim = self.dim_lines[idx]
+                    label_x = dim.get("label_x", (dim["x1"] + dim["x2"]) / 2)
+                    label_y = dim.get("label_y", (dim["y1"] + dim["y2"]) / 2)
+                    self.label_drag = {
+                        "type": "dim_label",
+                        "idx": idx,
+                        "start_x": mx, "start_y": my,
+                        "orig_x": label_x, "orig_y": label_y,
+                        "dragged": False
+                    }
+                    self.selected_dim = idx
+                    self.selected_label = None
+                    self.selected.clear()
+                    if not app.history_manager.is_restoring:
+                        app._capture_current_state()
+                    app.root.config(cursor="fleur")
+                    return
+
+        # Dim line body hit
+        if hasattr(app, '_composite_dim_lines') or True:
+            for idx in reversed(range(len(self.dim_lines))):
+                dim = self.dim_lines[idx]
+                x1, y1 = dim["x1"], dim["y1"]
+                x2, y2 = dim["x2"], dim["y2"]
+                dx = x2 - x1; dy = y2 - y1
+                seg_len_sq = dx*dx + dy*dy
+                if seg_len_sq == 0:
+                    continue
+                t = max(0.0, min(1.0, ((mx - x1)*dx + (my - y1)*dy) / seg_len_sq))
+                proj_x = x1 + t*dx; proj_y = y1 + t*dy
+                dist = math.sqrt((mx - proj_x)**2 + (my - proj_y)**2)
+                hit_radius = max((app.ax.get_xlim()[1] - app.ax.get_xlim()[0]) * 0.015, 0.2)
+                if dist < hit_radius and 0.05 < t < 0.95:
+                    self.label_drag = {
+                        "type": "dim_body",
+                        "idx": idx,
+                        "start_x": mx, "start_y": my,
+                        "orig_x1": x1, "orig_y1": y1,
+                        "orig_x2": x2, "orig_y2": y2,
+                        "orig_lx": dim.get("label_x", (x1 + x2) / 2),
+                        "orig_ly": dim.get("label_y", (y1 + y2) / 2),
+                        "dragged": False
+                    }
+                    self.selected_dim = idx
+                    self.selected_label = None
+                    self.selected.clear()
+                    if not app.history_manager.is_restoring:
+                        app._capture_current_state()
+                    app.root.config(cursor="fleur")
+                    return
+
+        # Label hit
+        if hasattr(app, '_composite_label_bboxes'):
+            for idx in reversed(range(len(app._composite_label_bboxes))):
+                bbox = app._composite_label_bboxes[idx]
+                if bbox[0] <= mx <= bbox[2] and bbox[1] <= my <= bbox[3]:
+                    self.label_drag = {
+                        "idx": idx,
+                        "start_x": mx, "start_y": my,
+                        "orig_x": self.labels[idx]["x"],
+                        "orig_y": self.labels[idx]["y"],
+                        "dragged": False
+                    }
+                    if not app.history_manager.is_restoring:
+                        app._capture_current_state()
+                    app.root.config(cursor="fleur")
+                    return
+
+        # Shape hit
+        multi = bool(event.key and ("control" in event.key or "super" in event.key
+                                     or "ctrl" in str(event.key).lower()))
+        for idx in reversed(range(len(app._composite_bboxes))):
+            bbox = app._composite_bboxes[idx]
+            if bbox[0] <= mx <= bbox[2] and bbox[1] <= my <= bbox[3]:
+                was_selected_before = idx in self.selected
+                if multi:
+                    if idx in self.selected:
+                        self.selected.discard(idx)
+                    else:
+                        self.selected.add(idx)
+                else:
+                    if idx not in self.selected:
+                        self.selected = {idx}
+                self.selected_label = None
+                self.selected_dim = None
+                self.update_selection_ui()
+
+                orig_positions = {}
+                for sel_idx in self.selected:
+                    orig_positions[sel_idx] = self.positions.get(sel_idx, (0.0, 0.0))
+
+                orig_labels = []
+                orig_dims = []
+                if len(self.selected) > 1:
+                    all_sel = self.all_shapes_selected()
+                    grp_bb = self.get_group_bbox()
+                    if grp_bb != (0, 0, 0, 0):
+                        lbl_idxs, dim_idxs = self.get_annotations_in_region(*grp_bb, include_all=all_sel)
+                        orig_labels = [(i, self.labels[i]["x"], self.labels[i]["y"]) for i in lbl_idxs]
+                        orig_dims = [(i, self.dim_lines[i]["x1"], self.dim_lines[i]["y1"],
+                                      self.dim_lines[i]["x2"], self.dim_lines[i]["y2"],
+                                      self.dim_lines[i].get("label_x"), self.dim_lines[i].get("label_y"))
+                                     for i in dim_idxs]
+                elif idx < len(app._composite_bboxes):
+                    s_bbox = app._composite_bboxes[idx]
+                    if s_bbox != (0, 0, 0, 0):
+                        lbl_idxs, dim_idxs = self.get_annotations_in_region(*s_bbox)
+                        orig_labels = [(i, self.labels[i]["x"], self.labels[i]["y"]) for i in lbl_idxs]
+                        orig_dims = [(i, self.dim_lines[i]["x1"], self.dim_lines[i]["y1"],
+                                      self.dim_lines[i]["x2"], self.dim_lines[i]["y2"],
+                                      self.dim_lines[i].get("label_x"), self.dim_lines[i].get("label_y"))
+                                     for i in dim_idxs]
+
+                self.drag_state = {
+                    "idx": idx,
+                    "start_x": mx, "start_y": my,
+                    "orig_pos": self.positions.get(idx, (0.0, 0.0)),
+                    "orig_positions": orig_positions,
+                    "dragged": False,
+                    "multi": multi,
+                    "was_selected_before": was_selected_before,
+                    "orig_labels": orig_labels,
+                    "orig_dims": orig_dims,
+                }
+                if not app.history_manager.is_restoring:
+                    app._capture_current_state()
+                app.root.config(cursor="fleur")
+                return
+
+        # Deselect label/dim
+        if self.selected_label is not None or self.selected_dim is not None:
+            self.selected_label = None
+            self.selected_dim = None
+            self.update_selection_ui()
+            app.generate_plot()
+
+        # Start marquee
+        self.marquee = {"start_x": mx, "start_y": my, "rect_artist": None}
+
+    def on_motion(self, event) -> None:
+        """Handle mouse motion — drag shapes/labels, draw marquee, or hover cursor."""
+        app = self.app
+
+        # Label or dim drag
+        if self.label_drag is not None:
+            if event.inaxes != app.ax:
+                return
+            mx, my = event.xdata, event.ydata
+            if mx is None or my is None:
+                return
+            drag = self.label_drag
+            drag["dragged"] = True
+            dx = mx - drag["start_x"]
+            dy = my - drag["start_y"]
+            idx = drag["idx"]
+            dtype = drag.get("type")
+
+            if dtype == "dim_endpoint":
+                if idx < len(self.dim_lines):
+                    dim = self.dim_lines[idx]
+                    ep = drag["endpoint"]
+                    new_x = drag["orig_x"] + dx
+                    new_y = drag["orig_y"] + dy
+                    if dim.get("constraint") == "height":
+                        new_x = drag["orig_x"]
+                    elif dim.get("constraint") == "width":
+                        new_y = drag["orig_y"]
+                    if ep == "p1":
+                        dim["x1"], dim["y1"] = new_x, new_y
+                    elif ep == "p2":
+                        dim["x2"], dim["y2"] = new_x, new_y
+                    app.generate_plot()
+            elif dtype == "dim_label":
+                if idx < len(self.dim_lines):
+                    self.dim_lines[idx]["label_x"] = drag["orig_x"] + dx
+                    self.dim_lines[idx]["label_y"] = drag["orig_y"] + dy
+                    app.generate_plot()
+            elif dtype == "dim_body":
+                if idx < len(self.dim_lines):
+                    dim = self.dim_lines[idx]
+                    dim["x1"] = drag["orig_x1"] + dx
+                    dim["y1"] = drag["orig_y1"] + dy
+                    dim["x2"] = drag["orig_x2"] + dx
+                    dim["y2"] = drag["orig_y2"] + dy
+                    if "label_x" in dim and "label_y" in dim:
+                        dim["label_x"] = drag["orig_lx"] + dx
+                        dim["label_y"] = drag["orig_ly"] + dy
+                    app.generate_plot()
+            else:
+                if idx < len(self.labels):
+                    self.labels[idx]["x"] = drag["orig_x"] + dx
+                    self.labels[idx]["y"] = drag["orig_y"] + dy
+                    app.generate_plot()
+            return
+
+        # Dim mode preview
+        if self.dim_mode is not None and self.dim_first_point is not None:
+            if event.inaxes == app.ax and event.xdata is not None:
+                mx, my = event.xdata, event.ydata
+                x1, y1 = self.dim_first_point
+                x2, y2 = mx, my
+                if self.dim_mode == "height":
+                    x2 = x1
+                elif self.dim_mode == "width":
+                    y2 = y1
+                if hasattr(app, '_dim_preview_line') and app._dim_preview_line:
+                    try:
+                        app._dim_preview_line.remove()
+                    except (ValueError, AttributeError):
+                        pass
+                app._dim_preview_line = app.ax.plot(
+                    [x1, x2], [y1, y2],
+                    color="#4488ff", linestyle="--", linewidth=1.0, alpha=0.6, zorder=20
+                )[0]
+                app.canvas.draw_idle()
+            return
+
+        # Marquee
+        if self.marquee is not None:
+            if event.inaxes != app.ax:
+                return
+            mx, my = event.xdata, event.ydata
+            if mx is None or my is None:
+                return
+            m = self.marquee
+            x0, y0 = m["start_x"], m["start_y"]
+            if m["rect_artist"] is not None:
+                try:
+                    m["rect_artist"].remove()
+                except (ValueError, AttributeError):
+                    pass
+            rx = min(x0, mx); ry = min(y0, my)
+            rw = abs(mx - x0); rh = abs(my - y0)
+            m["rect_artist"] = app.ax.add_patch(patches.Rectangle(
+                (rx, ry), rw, rh,
+                edgecolor="#4488ff", facecolor="#4488ff",
+                alpha=0.12, linewidth=1.2, linestyle="-", zorder=25
+            ))
+            app.canvas.draw_idle()
+            return
+
+        if self.drag_state is None:
+            # Hover cursor
+            if event.inaxes == app.ax and event.xdata is not None and event.ydata is not None:
+                mx, my = event.xdata, event.ydata
+                hit = False
+                hit_radius = max((app.ax.get_xlim()[1] - app.ax.get_xlim()[0]) * 0.015, 0.2)
+                if hasattr(app, '_composite_label_bboxes'):
+                    for bbox in app._composite_label_bboxes:
+                        if bbox[0] <= mx <= bbox[2] and bbox[1] <= my <= bbox[3]:
+                            hit = True; break
+                if not hit and hasattr(app, '_composite_dim_label_bboxes'):
+                    for bbox in app._composite_dim_label_bboxes:
+                        if bbox[0] <= mx <= bbox[2] and bbox[1] <= my <= bbox[3]:
+                            hit = True; break
+                if not hit and hasattr(app, '_composite_dim_endpoints'):
+                    for ep in app._composite_dim_endpoints:
+                        p1, p2 = ep["p1"], ep["p2"]
+                        for pt in (p1, p2):
+                            if math.sqrt((mx - pt[0])**2 + (my - pt[1])**2) < hit_radius:
+                                hit = True; break
+                        if not hit:
+                            dx2, dy2 = p2[0] - p1[0], p2[1] - p1[1]
+                            seg_len_sq = dx2*dx2 + dy2*dy2
+                            if seg_len_sq > 0:
+                                t2 = max(0.0, min(1.0, ((mx - p1[0])*dx2 + (my - p1[1])*dy2) / seg_len_sq))
+                                dist2 = math.sqrt((mx - p1[0] - t2*dx2)**2 + (my - p1[1] - t2*dy2)**2)
+                                if dist2 < hit_radius:
+                                    hit = True
+                        if hit:
+                            break
+                if not hit and hasattr(app, '_composite_bboxes'):
+                    for bbox in app._composite_bboxes:
+                        if bbox != (0, 0, 0, 0) and bbox[0] <= mx <= bbox[2] and bbox[1] <= my <= bbox[3]:
+                            hit = True; break
+                desired = "fleur" if hit else "arrow"
+                if app.root.cget("cursor") != desired:
+                    app.root.config(cursor=desired)
+            else:
+                if app.root.cget("cursor") not in ("crosshair", "fleur"):
+                    app.root.config(cursor="arrow")
+            return
+
+        if event.inaxes != app.ax:
+            return
+        mx, my = event.xdata, event.ydata
+        if mx is None or my is None:
+            return
+
+        drag = self.drag_state
+        idx = drag["idx"]
+        dx = mx - drag["start_x"]
+        dy = my - drag["start_y"]
+        new_x = drag["orig_pos"][0] + dx
+        new_y = drag["orig_pos"][1] + dy
+
+        if "half_w" not in drag and hasattr(app, '_composite_bboxes') and idx < len(app._composite_bboxes):
+            bbox = app._composite_bboxes[idx]
+            if bbox != (0, 0, 0, 0):
+                drag["half_w"] = (bbox[2] - bbox[0]) / 2
+                drag["half_h"] = (bbox[3] - bbox[1]) / 2
+
+        snap_dx = 0.0; snap_dy = 0.0
+        self.snap_guides = []
+        is_group = idx in self.selected and len(self.selected) > 1
+
+        if "half_w" in drag:
+            prov_cx = new_x; prov_cy = new_y
+            hw, hh = drag["half_w"], drag["half_h"]
+            prov_bbox = (prov_cx - hw, prov_cy - hh, prov_cx + hw, prov_cy + hh)
+            excluded = self.selected if is_group else {idx}
+            other_bboxes = []
+            for i, bbox in enumerate(app._composite_bboxes):
+                if i in excluded:
+                    other_bboxes.append((0, 0, 0, 0))
+                else:
+                    other_bboxes.append(bbox)
+            if hasattr(app, '_composite_snap_anchors') and idx < len(app._composite_snap_anchors):
+                cur_pos = self.positions.get(idx, (0.0, 0.0))
+                anchor_shift_x = new_x - cur_pos[0]
+                anchor_shift_y = new_y - cur_pos[1]
+                orig_anchors = app._composite_snap_anchors[idx]
+                app._composite_snap_anchors[idx] = [(ax2 + anchor_shift_x, ay2 + anchor_shift_y) for ax2, ay2 in orig_anchors]
+            snap_dx, snap_dy, guides = self.calc_snap(idx, prov_bbox, other_bboxes)
+            if hasattr(app, '_composite_snap_anchors') and idx < len(app._composite_snap_anchors):
+                app._composite_snap_anchors[idx] = orig_anchors
+            new_x += snap_dx; new_y += snap_dy
+            self.snap_guides = guides
+
+        drag["dragged"] = True
+        actual_dx = new_x - drag["orig_pos"][0]
+        actual_dy = new_y - drag["orig_pos"][1]
+
+        if is_group:
+            for sel_idx in self.selected:
+                orig = drag["orig_positions"].get(sel_idx, (0.0, 0.0))
+                self.positions[sel_idx] = (orig[0] + actual_dx, orig[1] + actual_dy)
+        else:
+            self.positions[idx] = (new_x, new_y)
+
+        for lbl_i, ox, oy in drag.get("orig_labels", []):
+            if lbl_i < len(self.labels):
+                self.labels[lbl_i]["x"] = ox + actual_dx
+                self.labels[lbl_i]["y"] = oy + actual_dy
+        for dim_entry in drag.get("orig_dims", []):
+            dim_i, ox1, oy1, ox2, oy2, olx, oly = dim_entry
+            if dim_i < len(self.dim_lines):
+                d = self.dim_lines[dim_i]
+                d["x1"] = ox1 + actual_dx; d["y1"] = oy1 + actual_dy
+                d["x2"] = ox2 + actual_dx; d["y2"] = oy2 + actual_dy
+                if olx is not None:
+                    d["label_x"] = olx + actual_dx
+                if oly is not None:
+                    d["label_y"] = oly + actual_dy
+
+        app.generate_plot()
+
+        if self.snap_guides:
+            for guide in self.snap_guides:
+                x1, y1, x2, y2, _ = guide
+                app.ax.plot([x1, x2], [y1, y2],
+                           color=AppConstants.SNAP_LINE_COLOR,
+                           linestyle=AppConstants.SNAP_LINE_STYLE,
+                           linewidth=AppConstants.SNAP_LINE_WIDTH,
+                           alpha=AppConstants.SNAP_LINE_ALPHA, zorder=20)
+            app.canvas.draw_idle()
+
+    def on_release(self, event) -> None:
+        """Handle mouse release — finalize drag, marquee, or selection."""
+        app = self.app
+
+        # Label/dim drag release
+        if self.label_drag is not None:
+            drag = self.label_drag
+            was_drag = drag.get("dragged", False)
+            idx = drag.get("idx")
+            dtype = drag.get("type")
+            is_dim_endpoint = dtype == "dim_endpoint"
+            is_dim_label = dtype == "dim_label"
+            is_dim_body = dtype == "dim_body"
+            self.label_drag = None
+            app.root.config(cursor="arrow")
+            if was_drag:
+                app.generate_plot()
+                if not app.history_manager.is_restoring:
+                    app._capture_current_state()
+            else:
+                if is_dim_endpoint or is_dim_label or is_dim_body:
+                    self.update_selection_ui()
+                    app.generate_plot()
+                else:
+                    if self.selected_label == idx:
+                        self.selected_label = None
+                    else:
+                        self.selected_label = idx
+                    self.selected.clear()
+                    self.update_selection_ui()
+                    app.generate_plot()
+            return
+
+        # Marquee finalization
+        if self.marquee is not None:
+            m = self.marquee
+            self.marquee = None
+            if m["rect_artist"] is not None:
+                try:
+                    m["rect_artist"].remove()
+                except (ValueError, AttributeError):
+                    pass
+            mx, my = None, None
+            if event.inaxes == app.ax and event.xdata is not None:
+                mx, my = event.xdata, event.ydata
+            if mx is not None:
+                x0, y0 = m["start_x"], m["start_y"]
+                sel_x_min = min(x0, mx); sel_x_max = max(x0, mx)
+                sel_y_min = min(y0, my); sel_y_max = max(y0, my)
+                if abs(mx - x0) > 0.3 or abs(my - y0) > 0.3:
+                    additive = False
+                    if hasattr(event, 'guiEvent') and event.guiEvent is not None:
+                        state = event.guiEvent.state
+                        additive = bool(state & 0x4) or bool(state & 0x10)
+                    if not additive:
+                        self.selected.clear()
+                    if hasattr(app, '_composite_bboxes'):
+                        for i, bbox in enumerate(app._composite_bboxes):
+                            if bbox == (0, 0, 0, 0):
+                                continue
+                            if (bbox[0] <= sel_x_max and bbox[2] >= sel_x_min and
+                                    bbox[1] <= sel_y_max and bbox[3] >= sel_y_min):
+                                self.selected.add(i)
+                    self.update_selection_ui()
+                    app.generate_plot()
+                else:
+                    if self.selected:
+                        self.selected.clear()
+                        self.update_selection_ui()
+                        app.generate_plot()
+            else:
+                if self.selected:
+                    self.selected.clear()
+                    self.update_selection_ui()
+                    app.generate_plot()
+            app.canvas.draw_idle()
+            return
+
+        if self.drag_state is None:
+            return
+
+        drag = self.drag_state
+        was_drag = drag.get("dragged", False)
+        multi = drag.get("multi", False)
+        idx = drag["idx"]
+
+        self.drag_state = None
+        self.snap_guides = []
+        app.root.config(cursor="arrow")
+
+        if was_drag:
+            app.generate_plot()
+            if not app.history_manager.is_restoring:
+                app._capture_current_state()
+        else:
+            was_selected_before = drag.get("was_selected_before", False)
+            if multi:
+                pass
+            else:
+                if was_selected_before and self.selected == {idx}:
+                    self.selected.clear()
+                else:
+                    self.selected = {idx}
+            self.update_selection_ui()
+            app.generate_plot()
+
+    # ── Snap calculation ──────────────────────────────────────────────────────
+
+    def calc_snap(self, drag_idx: int, drag_bbox: tuple,
+                  all_bboxes: list[tuple]) -> tuple[float, float, list]:
+        """Calculate snap offsets and guide lines for a dragged shape."""
+        app = self.app
+        threshold = AppConstants.SNAP_THRESHOLD
+        anchor_threshold = threshold * 0.9
+        snap_dx = 0.0; snap_dy = 0.0
+        guides = []
+        d_left, d_bottom, d_right, d_top = drag_bbox
+        d_cx = (d_left + d_right) / 2; d_cy = (d_bottom + d_top) / 2
+        best_x_dist = threshold; best_y_dist = threshold
+        best_x_is_anchor = False; best_y_is_anchor = False
+        has_anchors = hasattr(app, '_composite_snap_anchors') and app._composite_snap_anchors
+        drag_anchors = []
+        if has_anchors and drag_idx < len(app._composite_snap_anchors):
+            drag_anchors = app._composite_snap_anchors[drag_idx]
+        for i, bbox in enumerate(all_bboxes):
+            if i == drag_idx or bbox == (0, 0, 0, 0):
+                continue
+            o_left, o_bottom, o_right, o_top = bbox
+            o_cx = (o_left + o_right) / 2; o_cy = (o_bottom + o_top) / 2
+            x_snaps = [
+                (d_left, o_left), (d_left, o_right),
+                (d_right, o_left), (d_right, o_right),
+                (d_cx, o_cx),
+                (d_left, o_cx), (d_right, o_cx),
+                (d_cx, o_left), (d_cx, o_right),
+            ]
+            for d_edge, o_edge in x_snaps:
+                dist = abs(d_edge - o_edge)
+                if dist < best_x_dist and not (best_x_is_anchor and dist > best_x_dist - 0.3):
+                    best_x_dist = dist; best_x_is_anchor = False
+                    snap_dx = o_edge - d_edge
+                    all_y = [d_bottom, d_top, o_bottom, o_top]
+                    guides = [g for g in guides if g[4] != "x"]
+                    guides.append((o_edge, min(all_y) - 0.5, o_edge, max(all_y) + 0.5, "x"))
+            y_snaps = [
+                (d_bottom, o_bottom), (d_bottom, o_top),
+                (d_top, o_bottom), (d_top, o_top),
+                (d_cy, o_cy),
+                (d_bottom, o_cy), (d_top, o_cy),
+                (d_cy, o_bottom), (d_cy, o_top),
+            ]
+            for d_edge, o_edge in y_snaps:
+                dist = abs(d_edge - o_edge)
+                if dist < best_y_dist and not (best_y_is_anchor and dist > best_y_dist - 0.3):
+                    best_y_dist = dist; best_y_is_anchor = False
+                    snap_dy = o_edge - d_edge
+                    all_x = [d_left, d_right, o_left, o_right]
+                    guides = [g for g in guides if g[4] != "y"]
+                    guides.append((min(all_x) - 0.5, o_edge, max(all_x) + 0.5, o_edge, "y"))
+            if has_anchors and i < len(app._composite_snap_anchors):
+                other_anchors = app._composite_snap_anchors[i]
+                if drag_anchors and other_anchors:
+                    for dax, day in drag_anchors:
+                        for oax, oay in other_anchors:
+                            dist_x = abs(dax - oax)
+                            if dist_x < anchor_threshold:
+                                if dist_x < best_x_dist or (best_x_is_anchor and dist_x <= best_x_dist):
+                                    best_x_dist = dist_x; best_x_is_anchor = True
+                                    snap_dx = oax - dax
+                                    all_y = [d_bottom, d_top, o_bottom, o_top]
+                                    guides = [g for g in guides if g[4] != "x"]
+                                    guides.append((oax, min(all_y) - 0.5, oax, max(all_y) + 0.5, "x"))
+                            dist_y = abs(day - oay)
+                            if dist_y < anchor_threshold:
+                                if dist_y < best_y_dist or (best_y_is_anchor and dist_y <= best_y_dist):
+                                    best_y_dist = dist_y; best_y_is_anchor = True
+                                    snap_dy = oay - day
+                                    all_x = [d_left, d_right, o_left, o_right]
+                                    guides = [g for g in guides if g[4] != "y"]
+                                    guides.append((min(all_x) - 0.5, oay, max(all_x) + 0.5, oay, "y"))
+        return snap_dx, snap_dy, guides
+
+    # ── Selection helpers ─────────────────────────────────────────────────────
+
+    def update_selection_ui(self) -> None:
+        """Update listbox selection to match self.selected."""
+        app = self.app
+        if hasattr(app, 'composite_transfer') and app.composite_transfer is not None:
+            dest = app.composite_transfer.dest_listbox
+            dest.selection_clear(0, tk.END)
+            for idx in self.selected:
+                if idx < dest.size():
+                    dest.selection_set(idx)
+            if self.selected:
+                last = max(self.selected)
+                if last < dest.size():
+                    dest.see(last)
+
+    def get_group_center(self) -> tuple[float, float]:
+        """Calculate the center of all selected shapes' bounding boxes."""
+        app = self.app
+        if not self.selected or not hasattr(app, '_composite_bboxes'):
+            return (0.0, 0.0)
+        xs, ys = [], []
+        for idx in self.selected:
+            if idx < len(app._composite_bboxes):
+                bbox = app._composite_bboxes[idx]
+                if bbox != (0, 0, 0, 0):
+                    xs.append((bbox[0] + bbox[2]) / 2)
+                    ys.append((bbox[1] + bbox[3]) / 2)
+        if not xs:
+            return (0.0, 0.0)
+        return (sum(xs) / len(xs), sum(ys) / len(ys))
+
+    def get_group_bbox(self) -> tuple[float, float, float, float]:
+        """Get the bounding box encompassing all selected shapes."""
+        app = self.app
+        if not self.selected or not hasattr(app, '_composite_bboxes'):
+            return (0, 0, 0, 0)
+        x_mins, y_mins, x_maxs, y_maxs = [], [], [], []
+        for idx in self.selected:
+            if idx < len(app._composite_bboxes):
+                bbox = app._composite_bboxes[idx]
+                if bbox != (0, 0, 0, 0):
+                    x_mins.append(bbox[0]); y_mins.append(bbox[1])
+                    x_maxs.append(bbox[2]); y_maxs.append(bbox[3])
+        if not x_mins:
+            return (0, 0, 0, 0)
+        pad = 0.5
+        return (min(x_mins) - pad, min(y_mins) - pad, max(x_maxs) + pad, max(y_maxs) + pad)
+
+    def all_shapes_selected(self) -> bool:
+        """Check if every shape in the composite is selected."""
+        app = self.app
+        if not hasattr(app, 'composite_transfer') or app.composite_transfer is None:
+            return False
+        total = app.composite_transfer.dest_listbox.size()
+        return total > 0 and len(self.selected) >= total
+
+    def get_annotations_in_region(self, x_min: float, y_min: float,
+                                   x_max: float, y_max: float,
+                                   include_all: bool = False) -> tuple[list[int], list[int]]:
+        """Return (label_indices, dim_line_indices) within the given region."""
+        label_idxs = []
+        for i, lbl in enumerate(self.labels):
+            if include_all or (x_min <= lbl["x"] <= x_max and y_min <= lbl["y"] <= y_max):
+                label_idxs.append(i)
+        dim_idxs = []
+        for i, dim in enumerate(self.dim_lines):
+            if include_all:
+                dim_idxs.append(i)
+            else:
+                p1_in = x_min <= dim["x1"] <= x_max and y_min <= dim["y1"] <= y_max
+                p2_in = x_min <= dim["x2"] <= x_max and y_min <= dim["y2"] <= y_max
+                if p1_in and p2_in:
+                    dim_idxs.append(i)
+        return label_idxs, dim_idxs
+
+    # ── Annotation transform helpers ──────────────────────────────────────────
+
+    def rotate_annotations(self, label_idxs: list[int], dim_idxs: list[int],
+                            cx: float, cy: float, direction: int) -> None:
+        """Rotate annotations around (cx, cy) by 90 degrees."""
+        def rot(x, y):
+            rx, ry = x - cx, y - cy
+            if direction == 1:
+                return cx + ry, cy - rx
+            else:
+                return cx - ry, cy + rx
+        for i in label_idxs:
+            lbl = self.labels[i]
+            lbl["x"], lbl["y"] = rot(lbl["x"], lbl["y"])
+        for i in dim_idxs:
+            dim = self.dim_lines[i]
+            dim["x1"], dim["y1"] = rot(dim["x1"], dim["y1"])
+            dim["x2"], dim["y2"] = rot(dim["x2"], dim["y2"])
+            if "label_x" in dim and "label_y" in dim:
+                dim["label_x"], dim["label_y"] = rot(dim["label_x"], dim["label_y"])
+            c = dim.get("constraint")
+            if c == "height":
+                dim["constraint"] = "width"
+            elif c == "width":
+                dim["constraint"] = "height"
+
+    def flip_annotations_h(self, label_idxs: list[int], dim_idxs: list[int], cx: float) -> None:
+        """Mirror annotations horizontally around x=cx."""
+        for i in label_idxs:
+            lbl = self.labels[i]; lbl["x"] = 2 * cx - lbl["x"]
+        for i in dim_idxs:
+            dim = self.dim_lines[i]
+            dim["x1"] = 2 * cx - dim["x1"]; dim["x2"] = 2 * cx - dim["x2"]
+            if "label_x" in dim:
+                dim["label_x"] = 2 * cx - dim["label_x"]
+
+    def flip_annotations_v(self, label_idxs: list[int], dim_idxs: list[int], cy: float) -> None:
+        """Mirror annotations vertically around y=cy."""
+        for i in label_idxs:
+            lbl = self.labels[i]; lbl["y"] = 2 * cy - lbl["y"]
+        for i in dim_idxs:
+            dim = self.dim_lines[i]
+            dim["y1"] = 2 * cy - dim["y1"]; dim["y2"] = 2 * cy - dim["y2"]
+            if "label_y" in dim:
+                dim["label_y"] = 2 * cy - dim["label_y"]
+
+    # ── Patch translation ─────────────────────────────────────────────────────
+
+    @staticmethod
+    def translate_patch(patch, dx: float, dy: float) -> None:
+        """Translate a matplotlib patch by (dx, dy) in data coordinates."""
+        if isinstance(patch, (patches.Polygon, patches.FancyArrow)):
+            xy = patch.get_xy()
+            patch.set_xy(xy + np.array([dx, dy]))
+        elif isinstance(patch, (patches.Circle, patches.Ellipse, patches.Arc, patches.Wedge)):
+            cx, cy = patch.center
+            patch.set_center((cx + dx, cy + dy))
+        elif isinstance(patch, patches.Rectangle):
+            x, y = patch.get_xy()
+            patch.set_xy((x + dx, y + dy))
+        else:
+            if hasattr(patch, 'get_xy'):
+                xy = patch.get_xy()
+                if hasattr(xy, '__add__'):
+                    patch.set_xy(xy + np.array([dx, dy]))
+                else:
+                    patch.set_xy((xy[0] + dx, xy[1] + dy))
+            elif hasattr(patch, 'center'):
+                cx, cy = patch.center
+                patch.set_center((cx + dx, cy + dy))
+
+    # ── Dim line placement mode ───────────────────────────────────────────────
+
+    def start_dim_mode(self, mode: str) -> None:
+        """Enter dimension line placement mode."""
+        app = self.app
+        text = app._composite_label_entry.get().strip() if hasattr(app, '_composite_label_entry') else ""
+        if not text:
+            defaults = {"height": "h", "width": "w", "radius": "r", "free": "d"}
+            text = defaults.get(mode, "d")
+        self.dim_mode = mode
+        self.dim_first_point = None
+        if hasattr(app, '_dim_status_label'):
+            app._dim_status_label.config(text=f"Click first point for {mode} dimension line...")
+        app.root.config(cursor="crosshair")
+
+    def cancel_dim_mode(self) -> None:
+        """Exit dimension line placement mode."""
+        app = self.app
+        self.dim_mode = None
+        self.dim_first_point = None
+        if hasattr(app, '_dim_status_label'):
+            app._dim_status_label.config(text="")
+        if hasattr(app, '_dim_preview_line') and app._dim_preview_line:
+            try:
+                app._dim_preview_line.remove()
+            except (ValueError, AttributeError):
+                pass
+            app._dim_preview_line = None
+        app.root.config(cursor="arrow")
+
+    def handle_dim_click(self, mx: float, my: float) -> bool:
+        """Handle a click during dimension line placement. Returns True if handled."""
+        app = self.app
+        if self.dim_mode is None:
+            return False
+        mode = self.dim_mode
+        if self.dim_first_point is None:
+            self.dim_first_point = (mx, my)
+            if hasattr(app, '_dim_status_label'):
+                app._dim_status_label.config(text=f"Click second point for {mode} dimension line...")
+            return True
+        else:
+            x1, y1 = self.dim_first_point
+            x2, y2 = mx, my
+            if mode == "height":
+                x2 = x1
+            elif mode == "width":
+                y2 = y1
+            text = app._composite_label_entry.get().strip() if hasattr(app, '_composite_label_entry') else ""
+            if not text:
+                defaults = {"height": "h", "width": "w", "radius": "r", "free": "d"}
+                text = defaults.get(mode, "d")
+            mid_x = (x1 + x2) / 2; mid_y = (y1 + y2) / 2
+            self.dim_lines.append({
+                "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                "text": text,
+                "constraint": mode if mode != "free" else None,
+                "label_x": mid_x, "label_y": mid_y
+            })
+            if hasattr(app, '_composite_label_entry'):
+                app._composite_label_entry.delete(0, tk.END)
+            self.selected_dim = len(self.dim_lines) - 1
+            self.cancel_dim_mode()
+            app.generate_plot()
+            if not app.history_manager.is_restoring:
+                app._capture_current_state()
+            return True
+
+    # ── Label management ──────────────────────────────────────────────────────
+
+    def add_label(self) -> None:
+        """Add a custom label to the composite canvas."""
+        app = self.app
+        if not hasattr(app, '_composite_label_entry'):
+            return
+        text = app._composite_label_entry.get().strip()
+        if not text:
+            return
+        xlim = app.ax.get_xlim(); ylim = app.ax.get_ylim()
+        cx = (xlim[0] + xlim[1]) / 2; cy = (ylim[0] + ylim[1]) / 2
+        self.labels.append({"text": text, "x": cx, "y": cy})
+        app._composite_label_entry.delete(0, tk.END)
+        self.selected_label = len(self.labels) - 1
+        app.generate_plot()
+        if not app.history_manager.is_restoring:
+            app._capture_current_state()
+
+    def remove_label(self) -> None:
+        """Remove the selected composite label."""
+        if self.selected_label is None or self.selected_label >= len(self.labels):
+            return
+        self.labels.pop(self.selected_label)
+        self.selected_label = None
+        self.app.generate_plot()
+        if not self.app.history_manager.is_restoring:
+            self.app._capture_current_state()
+
+    def confirm_label(self) -> None:
+        """Add or update depending on edit mode."""
+        if self.edit_mode is not None:
+            self.apply_edit()
+        else:
+            self.add_label()
+
+    def remove_selected_annotation(self) -> None:
+        """Remove the selected label or dimension line."""
+        if self.selected_label is not None:
+            self.remove_label()
+        elif self.selected_dim is not None:
+            if self.selected_dim < len(self.dim_lines):
+                self.dim_lines.pop(self.selected_dim)
+            self.selected_dim = None
+            self.app.generate_plot()
+            if not self.app.history_manager.is_restoring:
+                self.app._capture_current_state()
+
+    def enter_edit(self, edit_type: str, idx: int) -> None:
+        """Enter edit mode for a label or dim line."""
+        app = self.app
+        if edit_type == "label" and idx < len(self.labels):
+            existing = self.labels[idx]["text"]
+        elif edit_type == "dim" and idx < len(self.dim_lines):
+            existing = self.dim_lines[idx]["text"]
+        else:
+            return
+        self.edit_mode = {"type": edit_type, "idx": idx}
+        if hasattr(app, '_composite_label_entry'):
+            app._composite_label_entry.delete(0, tk.END)
+            app._composite_label_entry.insert(0, existing)
+            app._composite_label_entry.focus_set()
+            app._composite_label_entry.select_range(0, tk.END)
+        if hasattr(app, '_composite_text_btn'):
+            app._composite_text_btn.config(text="Update")
+        if hasattr(app, '_composite_cancel_btn'):
+            app._composite_cancel_btn.pack(side=tk.LEFT, padx=1)
+
+    def apply_edit(self) -> None:
+        """Apply edited text to label or dim line."""
+        app = self.app
+        if self.edit_mode is None:
+            return
+        if not hasattr(app, '_composite_label_entry'):
+            return
+        new_text = app._composite_label_entry.get().strip()
+        if not new_text:
+            self.cancel_edit()
+            return
+        edit_type = self.edit_mode["type"]
+        idx = self.edit_mode["idx"]
+        if edit_type == "label" and idx < len(self.labels):
+            self.labels[idx]["text"] = new_text
+        elif edit_type == "dim" and idx < len(self.dim_lines):
+            self.dim_lines[idx]["text"] = new_text
+        self.cancel_edit()
+        app.generate_plot()
+        if not app.history_manager.is_restoring:
+            app._capture_current_state()
+
+    def cancel_edit(self) -> None:
+        """Exit edit mode."""
+        app = self.app
+        self.edit_mode = None
+        if hasattr(app, '_composite_label_entry'):
+            app._composite_label_entry.delete(0, tk.END)
+        if hasattr(app, '_composite_text_btn'):
+            app._composite_text_btn.config(text="+ Text")
+        if hasattr(app, '_composite_cancel_btn'):
+            app._composite_cancel_btn.pack_forget()
+
+    # ── Flip and rotate ───────────────────────────────────────────────────────
+
+    def flip(self, axis: str) -> None:
+        """Shared implementation for horizontal ('h') and vertical ('v') flip."""
+        app = self.app
+        if not self.selected:
+            return
+        if not app.history_manager.is_restoring:
+            app._capture_current_state()
+
+        pre_flip_bbox = self.get_group_bbox() if len(self.selected) > 1 else (0, 0, 0, 0)
+        pre_flip_gcx, pre_flip_gcy = self.get_group_center() if len(self.selected) > 1 else (0, 0)
+        pivot = pre_flip_gcx if axis == 'h' else pre_flip_gcy
+
+        selected = app.composite_transfer.get_selected_shapes() if hasattr(app, 'composite_transfer') and app.composite_transfer else []
+
+        if len(self.selected) > 1:
+            for idx in self.selected:
+                pos = self.positions.get(idx, (0.0, 0.0))
+                if idx < len(app._composite_bboxes):
+                    bbox = app._composite_bboxes[idx]
+                    if bbox != (0, 0, 0, 0):
+                        if axis == 'h':
+                            shape_c = (bbox[0] + bbox[2]) / 2
+                            new_c = 2 * pivot - shape_c
+                            self.positions[idx] = (pos[0] + (new_c - shape_c), pos[1])
+                        else:
+                            shape_c = (bbox[1] + bbox[3]) / 2
+                            new_c = 2 * pivot - shape_c
+                            self.positions[idx] = (pos[0], pos[1] + (new_c - shape_c))
+
+                t = self.transforms.setdefault(idx, {"flip_h": False, "flip_v": False, "base_side": 0})
+                num_sides = 4
+                shape_name_for_flip = ""
+                config = ShapeConfig()
+                if idx < len(selected):
+                    shape_name_for_flip = selected[idx]
+                    config = ShapeConfigProvider.get(shape_name_for_flip)
+                    num_sides = config.num_sides if config.num_sides > 0 else 4
+
+                effective_side = t["base_side"]
+                if num_sides >= 4 and config.uses_base_side_flip:
+                    if t["flip_v"]:
+                        effective_side = (effective_side + 2) % num_sides
+                        t["flip_v"] = False
+                    if t["flip_h"]:
+                        if effective_side in (1, 3):
+                            effective_side = 4 - effective_side
+                        t["flip_h"] = False
+                    if axis == 'h':
+                        if effective_side in (1, 3):
+                            effective_side = 4 - effective_side
+                    else:
+                        if effective_side in (0, 2):
+                            effective_side = 2 - effective_side
+                    t["base_side"] = effective_side
+                else:
+                    if axis == 'h':
+                        t["flip_h"] = not t["flip_h"]
+                    else:
+                        t["flip_v"] = not t["flip_v"]
+        else:
+            for idx in self.selected:
+                t = self.transforms.setdefault(idx, {"flip_h": False, "flip_v": False, "base_side": 0})
+                if axis == 'h':
+                    t["flip_h"] = not t["flip_h"]
+                else:
+                    t["flip_v"] = not t["flip_v"]
+                if idx < len(app._composite_bboxes):
+                    bbox = app._composite_bboxes[idx]
+                    if bbox != (0, 0, 0, 0):
+                        if axis == 'h':
+                            shape_c = (bbox[0] + bbox[2]) / 2
+                            lbl_idxs, dim_idxs = self.get_annotations_in_region(*bbox)
+                            if lbl_idxs or dim_idxs:
+                                self.flip_annotations_h(lbl_idxs, dim_idxs, shape_c)
+                        else:
+                            shape_c = (bbox[1] + bbox[3]) / 2
+                            lbl_idxs, dim_idxs = self.get_annotations_in_region(*bbox)
+                            if lbl_idxs or dim_idxs:
+                                self.flip_annotations_v(lbl_idxs, dim_idxs, shape_c)
+
+        if len(self.selected) > 1 and pre_flip_bbox != (0, 0, 0, 0):
+            all_sel = self.all_shapes_selected()
+            lbl_idxs, dim_idxs = self.get_annotations_in_region(*pre_flip_bbox, include_all=all_sel)
+            if lbl_idxs or dim_idxs:
+                if axis == 'h':
+                    self.flip_annotations_h(lbl_idxs, dim_idxs, pre_flip_gcx)
+                else:
+                    self.flip_annotations_v(lbl_idxs, dim_idxs, pre_flip_gcy)
+
+        app.generate_plot()
+        if not app.history_manager.is_restoring:
+            app._capture_current_state(force=True)
+
+    def flip_h(self) -> None:
+        """Flip selected shapes horizontally."""
+        self.flip('h')
+
+    def flip_v(self) -> None:
+        """Flip selected shapes vertically."""
+        self.flip('v')
+
+    def rotate(self, direction: int) -> None:
+        """Rotate selected shapes as a group around their collective center."""
+        app = self.app
+        if not self.selected:
+            return
+        if not hasattr(app, 'composite_transfer') or app.composite_transfer is None:
+            return
+        selected = app.composite_transfer.get_selected_shapes()
+        if not app.history_manager.is_restoring:
+            app._capture_current_state()
+
+        pre_rot_center = None
+        pre_rot_bbox = (0, 0, 0, 0)
+        if len(self.selected) > 1:
+            pre_rot_bbox = self.get_group_bbox()
+            centers_pre = []
+            for idx in self.selected:
+                if idx < len(app._composite_bboxes):
+                    bbox = app._composite_bboxes[idx]
+                    if bbox != (0, 0, 0, 0):
+                        centers_pre.append(((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2))
+            if centers_pre:
+                pre_rot_center = (sum(o[0] for o in centers_pre) / len(centers_pre),
+                                  sum(o[1] for o in centers_pre) / len(centers_pre))
+
+        if len(self.selected) > 1:
+            shape_centers = {}
+            for idx in self.selected:
+                if idx < len(app._composite_bboxes):
+                    bbox = app._composite_bboxes[idx]
+                    if bbox != (0, 0, 0, 0):
+                        shape_centers[idx] = ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
+            if not shape_centers:
+                return
+            gcx = sum(o[0] for o in shape_centers.values()) / len(shape_centers)
+            gcy = sum(o[1] for o in shape_centers.values()) / len(shape_centers)
+            target_centers = {}
+            for idx in self.selected:
+                if idx in shape_centers:
+                    ox, oy = shape_centers[idx]
+                    rx = ox - gcx; ry = oy - gcy
+                    if direction == 1:
+                        new_rx, new_ry = ry, -rx
+                    else:
+                        new_rx, new_ry = -ry, rx
+                    target_centers[idx] = (gcx + new_rx, gcy + new_ry)
+                if idx < len(selected):
+                    shape_name = selected[idx]
+                    config = ShapeConfigProvider.get(shape_name)
+                    num_sides = config.num_sides if config.num_sides > 0 else 4
+                    t = self.transforms.setdefault(idx, {"flip_h": False, "flip_v": False, "base_side": 0})
+                    t["base_side"] = (t["base_side"] + direction) % num_sides
+            app.generate_plot()
+            for idx, (target_cx, target_cy) in target_centers.items():
+                actual_cx, actual_cy = None, None
+                if idx < len(app._composite_bboxes):
+                    new_bbox = app._composite_bboxes[idx]
+                    if new_bbox != (0, 0, 0, 0):
+                        actual_cx = (new_bbox[0] + new_bbox[2]) / 2
+                        actual_cy = (new_bbox[1] + new_bbox[3]) / 2
+                if actual_cx is not None:
+                    correction_dx = target_cx - actual_cx
+                    correction_dy = target_cy - actual_cy
+                    pos = self.positions.get(idx, (0.0, 0.0))
+                    self.positions[idx] = (pos[0] + correction_dx, pos[1] + correction_dy)
+        else:
+            for idx in self.selected:
+                if idx >= len(selected):
+                    continue
+                shape_name = selected[idx]
+                config = ShapeConfigProvider.get(shape_name)
+                num_sides = config.num_sides if config.num_sides > 0 else 4
+                t = self.transforms.setdefault(idx, {"flip_h": False, "flip_v": False, "base_side": 0})
+                t["base_side"] = (t["base_side"] + direction) % num_sides
+                if idx < len(app._composite_bboxes):
+                    bbox = app._composite_bboxes[idx]
+                    if bbox != (0, 0, 0, 0):
+                        shape_cx = (bbox[0] + bbox[2]) / 2
+                        shape_cy = (bbox[1] + bbox[3]) / 2
+                        lbl_idxs, dim_idxs = self.get_annotations_in_region(*bbox)
+                        if lbl_idxs or dim_idxs:
+                            self.rotate_annotations(lbl_idxs, dim_idxs, shape_cx, shape_cy, direction)
+
+        if len(self.selected) > 1 and pre_rot_center is not None:
+            rot_cx, rot_cy = pre_rot_center
+            all_sel = self.all_shapes_selected()
+            lbl_idxs, dim_idxs = self.get_annotations_in_region(*pre_rot_bbox, include_all=all_sel)
+            if lbl_idxs or dim_idxs:
+                self.rotate_annotations(lbl_idxs, dim_idxs, rot_cx, rot_cy, direction)
+
+        app._composite_view_limits = None
+        app.generate_plot()
+        if not app.history_manager.is_restoring:
+            app._capture_current_state(force=True)
+
+    def reset(self) -> None:
+        """Clear all composite annotation and selection state."""
+        self.positions = {}
+        self.transforms = {}
+        self.selected = set()
+        self.labels = []
+        self.label_drag = None
+        self.selected_label = None
+        self.dim_lines = []
+        self.selected_dim = None
+        self.dim_mode = None
+        self.dim_first_point = None
+        self.edit_mode = None
+        self.drag_state = None
+        self.marquee = None
+        self.snap_guides = []
+
+
+
+class StandaloneAnnotationController:
+    """Manages freeform labels and dimension lines on the standalone (non-composite) canvas.
+
+    Owns all standalone annotation state and the four mouse-event handlers.
+    Calls back into GeometryApp via self.app for shared resources (canvas,
+    ax, history_manager, generate_plot, label_manager, etc.).
+
+    Instantiated once in GeometryApp.__init__ and stored as self.standalone_ctrl.
+    GeometryApp retains thin delegate methods so all existing call sites work
+    without modification.
+    """
+
+    def __init__(self, app: "GeometryApp") -> None:
+        self.app = app
+        # Annotation data
+        self.labels: list[dict] = []               # [{"text": str, "x": float, "y": float}]
+        self.selected_label: Optional[int] = None
+        self.label_bboxes: list[tuple] = []
+        self.dim_lines: list[StandaloneDimLine] = []
+        self.selected_dim: Optional[int] = None
+        self.dim_endpoints: list[dict] = []
+        self.dim_label_bboxes: list[tuple] = []
+        self.dim_mode: bool = False
+        self.dim_first_point: Optional[tuple] = None
+        self.dim_preview_line = None
+        self.edit_mode: Optional[dict] = None      # {"type": "label"/"dim"/"builtin", "idx": int}
+        # Shared drag/hover state (also used by composite path — kept on app)
+        # We access app._label_drag_state, app._label_hover_active directly.
+        # Builtin selection state
+        self.builtin_selected: Optional[str] = None
+        self.builtin_dim_endpoints: list[dict] = []  # [{key, p1, p2}] populated per render
+
+    # ── Event connection ──────────────────────────────────────────────────────
+
+    def connect(self) -> None:
+        """Connect mouse events for standalone label dragging."""
+        self.disconnect()
+        self.app._standalone_event_ids = [
+            self.app.canvas.mpl_connect('button_press_event', self.on_press),
+            self.app.canvas.mpl_connect('motion_notify_event', self.on_motion),
+            self.app.canvas.mpl_connect('button_release_event', self.on_release),
+            self.app.canvas.mpl_connect('motion_notify_event', self.on_hover),
+        ]
+
+    def disconnect(self) -> None:
+        """Disconnect standalone label drag events."""
+        for eid in self.app._standalone_event_ids:
+            try:
+                self.app.canvas.mpl_disconnect(eid)
+            except Exception:
+                pass
+        self.app._standalone_event_ids = []
+        self.app._label_drag_state = None
+
+    # ── Geometry helpers ──────────────────────────────────────────────────────
+
+    def pixels_to_data_pad(self, px: float) -> tuple[float, float]:
+        """Convert a pixel size to data-unit padding (x, y) based on current axis state."""
+        app = self.app
+        fig_w = app.fig.get_figwidth() * app.fig.dpi
+        fig_h = app.fig.get_figheight() * app.fig.dpi
+        ax_pos = app.ax.get_position()
+        ax_px_w = fig_w * ax_pos.width
+        ax_px_h = fig_h * ax_pos.height
+        xlim = app.ax.get_xlim()
+        ylim = app.ax.get_ylim()
+        data_w = xlim[1] - xlim[0]
+        data_h = ylim[1] - ylim[0]
+        pad_x = px * data_w / ax_px_w if ax_px_w > 0 else 0.1
+        pad_y = px * data_h / ax_px_h if ax_px_h > 0 else 0.1
+        return pad_x, pad_y
+
+    def find_nearest_label(self, x: float, y: float, threshold: float = 0.8) -> Optional[str]:
+        """Find the nearest built-in label key to the given data coordinates."""
+        app = self.app
+        if not app.label_manager.auto_positions:
+            return None
+        best_key = None
+        best_dist = threshold
+        xlim = app.ax.get_xlim()
+        ylim = app.ax.get_ylim()
+        pad_x, pad_y = self.pixels_to_data_pad(3)
+        scale = max(pad_x, pad_y)
+        if scale > 0:
+            best_dist = scale
+        for key, pos_data in app.label_manager.auto_positions.items():
+            lx, ly = pos_data[0], pos_data[1]
+            if key in app.label_manager.custom_positions:
+                lx, ly = app.label_manager.custom_positions[key]
+            text, show = app.label_manager.get_entry_values(key)
+            if not (text and show):
+                continue
+            dist = math.sqrt((x - lx)**2 + (y - ly)**2)
+            if dist < best_dist:
+                best_dist = dist
+                best_key = key
+        return best_key
+
+    # ── Mouse event handlers ──────────────────────────────────────────────────
+
+    def on_hover(self, event) -> None:
+        """Change cursor when hovering over a draggable label or dim line."""
+        app = self.app
+        if app._label_drag_state is not None:
+            return
+        if self.dim_mode:
+            return
+        if app._is_composite_shape():
+            if getattr(app, '_label_hover_active', False):
+                app.root.config(cursor="arrow")
+                app._label_hover_active = False
+            return
+        if not app.shape_var.get():
+            if getattr(app, '_label_hover_active', False):
+                app.root.config(cursor="arrow")
+                app._label_hover_active = False
+            return
+        if event.inaxes != app.ax:
+            if getattr(app, '_label_hover_active', False):
+                app.root.config(cursor="arrow")
+                app._label_hover_active = False
+            return
+        x, y = event.xdata, event.ydata
+        if x is None or y is None:
+            if getattr(app, '_label_hover_active', False):
+                app.root.config(cursor="arrow")
+                app._label_hover_active = False
+            return
+        hit = False
+        if self.find_nearest_label(x, y):
+            hit = True
+        if not hit:
+            for bbox in self.label_bboxes:
+                if bbox[0] <= x <= bbox[2] and bbox[1] <= y <= bbox[3]:
+                    hit = True
+                    break
+        if not hit:
+            for bbox in self.dim_label_bboxes:
+                if bbox[0] <= x <= bbox[2] and bbox[1] <= y <= bbox[3]:
+                    hit = True
+                    break
+        if not hit:
+            hit_radius = max((app.ax.get_xlim()[1] - app.ax.get_xlim()[0]) * 0.015, 0.2)
+            for ep in self.dim_endpoints:
+                p1, p2 = ep["p1"], ep["p2"]
+                for pt in (p1, p2):
+                    if math.sqrt((x - pt[0])**2 + (y - pt[1])**2) < hit_radius:
+                        hit = True
+                        break
+                if not hit:
+                    dx, dy = p2[0] - p1[0], p2[1] - p1[1]
+                    seg_len_sq = dx*dx + dy*dy
+                    if seg_len_sq > 0:
+                        t = max(0.0, min(1.0, ((x - p1[0])*dx + (y - p1[1])*dy) / seg_len_sq))
+                        dist = math.sqrt((x - p1[0] - t*dx)**2 + (y - p1[1] - t*dy)**2)
+                        if dist < hit_radius:
+                            hit = True
+                if hit:
+                    break
+        if not hit:
+            hit_radius = max((app.ax.get_xlim()[1] - app.ax.get_xlim()[0]) * 0.015, 0.2)
+            for ep in self.builtin_dim_endpoints:
+                p1, p2 = ep["p1"], ep["p2"]
+                dx, dy = p2[0] - p1[0], p2[1] - p1[1]
+                seg_len_sq = dx*dx + dy*dy
+                if seg_len_sq > 0:
+                    t = max(0.0, min(1.0, ((x - p1[0])*dx + (y - p1[1])*dy) / seg_len_sq))
+                    dist = math.sqrt((x - p1[0] - t*dx)**2 + (y - p1[1] - t*dy)**2)
+                    if dist < hit_radius:
+                        hit = True
+                        break
+        if hit:
+            if not getattr(app, '_label_hover_active', False):
+                app.root.config(cursor="fleur")
+                app._label_hover_active = True
+        else:
+            if getattr(app, '_label_hover_active', False):
+                app.root.config(cursor="arrow")
+                app._label_hover_active = False
+
+    def on_press(self, event) -> None:
+        """Handle mouse press — start label drag if a label is hit."""
+        app = self.app
+        if event.inaxes != app.ax or event.button != 1:
+            return
+        if app._is_composite_shape():
+            return
+        if not app.shape_var.get():
+            return
+        if self.dim_mode:
+            x, y = event.xdata, event.ydata
+            if x is None or y is None:
+                return
+            if self.dim_first_point is None:
+                self.dim_first_point = (x, y)
+            else:
+                x1, y1 = self.dim_first_point
+                text = app._standalone_label_entry.get().strip() if hasattr(app, '_standalone_label_entry') else "f"
+                if not text:
+                    text = "f"
+                mid_x = (x1 + x) / 2
+                mid_y = (y1 + y) / 2
+                if not app.history_manager.is_restoring:
+                    app._capture_current_state()
+                self.dim_lines.append({
+                    "x1": x1, "y1": y1, "x2": x, "y2": y,
+                    "text": text,
+                    "preset_key": None,
+                    "user_dragged": True,
+                    "label_x": mid_x,
+                    "label_y": mid_y,
+                })
+                self.selected_dim = len(self.dim_lines) - 1
+                self.cancel_dim_mode()
+                if not app.history_manager.is_restoring:
+                    app._capture_current_state()
+            return
+        x, y = event.xdata, event.ydata
+        if x is None or y is None:
+            return
+        if getattr(event, 'dblclick', False):
+            hit_key = self.find_nearest_label(x, y)
+            if hit_key and hit_key in AppConstants.BUILTIN_LABEL_KEYS:
+                t, s = app.label_manager.get_entry_values(hit_key)
+                if t and s:
+                    app._builtin_edit_key = hit_key
+                    self.enter_edit("builtin", 0)
+                    return
+            for idx in reversed(range(len(self.label_bboxes))):
+                bbox = self.label_bboxes[idx]
+                if bbox[0] <= x <= bbox[2] and bbox[1] <= y <= bbox[3]:
+                    self.enter_edit("label", idx)
+                    return
+            for idx in reversed(range(len(self.dim_label_bboxes))):
+                bbox = self.dim_label_bboxes[idx]
+                if bbox[0] <= x <= bbox[2] and bbox[1] <= y <= bbox[3]:
+                    self.enter_edit("dim", idx)
+                    return
+        for idx in reversed(range(len(self.dim_label_bboxes))):
+            bbox = self.dim_label_bboxes[idx]
+            if bbox[0] <= x <= bbox[2] and bbox[1] <= y <= bbox[3]:
+                dim = self.dim_lines[idx]
+                self.builtin_selected = None
+                app._label_drag_state = {
+                    "type": "standalone_dim_label",
+                    "idx": idx,
+                    "started": False,
+                    "start_x": x,
+                    "start_y": y,
+                    "orig_x": dim.get("label_x", (dim["x1"] + dim["x2"]) / 2),
+                    "orig_y": dim.get("label_y", (dim["y1"] + dim["y2"]) / 2),
+                }
+                return
+        for idx in reversed(range(len(self.dim_endpoints))):
+            ep = self.dim_endpoints[idx]
+            for ep_name, ep_pos in [("p1", ep["p1"]), ("p2", ep["p2"])]:
+                if math.sqrt((x - ep_pos[0])**2 + (y - ep_pos[1])**2) < max(
+                        (app.ax.get_xlim()[1] - app.ax.get_xlim()[0]) * 0.02, 0.3):
+                    self.selected_dim = idx
+                    self.selected_label = None
+                    self.builtin_selected = None
+                    app.generate_plot()
+                    dim = self.dim_lines[idx]
+                    app._label_drag_state = {
+                        "type": "standalone_dim_endpoint",
+                        "idx": idx,
+                        "endpoint": ep_name,
+                        "started": False,
+                        "start_x": x,
+                        "start_y": y,
+                        "orig_x": ep_pos[0],
+                        "orig_y": ep_pos[1],
+                    }
+                    return
+        for idx in reversed(range(len(self.dim_endpoints))):
+            ep = self.dim_endpoints[idx]
+            p1, p2 = ep["p1"], ep["p2"]
+            dx, dy = p2[0] - p1[0], p2[1] - p1[1]
+            seg_len_sq = dx * dx + dy * dy
+            if seg_len_sq > 0:
+                t = max(0, min(1, ((x - p1[0]) * dx + (y - p1[1]) * dy) / seg_len_sq))
+                proj_x = p1[0] + t * dx
+                proj_y = p1[1] + t * dy
+                dist = math.sqrt((x - proj_x)**2 + (y - proj_y)**2)
+                hit_radius = max((app.ax.get_xlim()[1] - app.ax.get_xlim()[0]) * 0.015, 0.2)
+                if dist < hit_radius and 0.05 < t < 0.95:
+                    self.selected_dim = idx
+                    self.selected_label = None
+                    self.builtin_selected = None
+                    app.generate_plot()
+                    dim = self.dim_lines[idx]
+                    app._label_drag_state = {
+                        "type": "standalone_dim_body",
+                        "idx": idx,
+                        "started": False,
+                        "start_x": x,
+                        "start_y": y,
+                        "orig_x1": dim["x1"], "orig_y1": dim["y1"],
+                        "orig_x2": dim["x2"], "orig_y2": dim["y2"],
+                        "orig_lx": dim.get("label_x", (dim["x1"] + dim["x2"]) / 2),
+                        "orig_ly": dim.get("label_y", (dim["y1"] + dim["y2"]) / 2),
+                    }
+                    return
+        hit_radius = max((app.ax.get_xlim()[1] - app.ax.get_xlim()[0]) * 0.015, 0.2)
+        for ep in self.builtin_dim_endpoints:
+            p1, p2 = ep["p1"], ep["p2"]
+            dx_seg, dy_seg = p2[0] - p1[0], p2[1] - p1[1]
+            seg_len_sq = dx_seg * dx_seg + dy_seg * dy_seg
+            if seg_len_sq > 0:
+                t = max(0.0, min(1.0, ((x - p1[0]) * dx_seg + (y - p1[1]) * dy_seg) / seg_len_sq))
+                proj_x = p1[0] + t * dx_seg
+                proj_y = p1[1] + t * dy_seg
+                dist = math.sqrt((x - proj_x) ** 2 + (y - proj_y) ** 2)
+                if dist < hit_radius:
+                    self.builtin_selected = ep["key"]
+                    self.selected_dim = None
+                    self.selected_label = None
+                    app.generate_plot()
+                    cur_off = app.label_manager.custom_dim_offsets.get(ep["key"], (0.0, 0.0))
+                    app._label_drag_state = {
+                        "type": "builtin_dim_body",
+                        "key": ep["key"],
+                        "started": False,
+                        "start_x": x,
+                        "start_y": y,
+                        "orig_dx": cur_off[0],
+                        "orig_dy": cur_off[1],
+                    }
+                    return
+        for idx in reversed(range(len(self.label_bboxes))):
+            bbox = self.label_bboxes[idx]
+            if bbox[0] <= x <= bbox[2] and bbox[1] <= y <= bbox[3]:
+                app._label_drag_state = {
+                    "type": "standalone_label",
+                    "idx": idx,
+                    "started": False,
+                    "start_x": x,
+                    "start_y": y,
+                    "orig_x": self.labels[idx]["x"],
+                    "orig_y": self.labels[idx]["y"],
+                }
+                return
+        key = self.find_nearest_label(x, y)
+        if key:
+            if key in AppConstants.BUILTIN_LABEL_KEYS:
+                if self.builtin_selected == key:
+                    self.builtin_selected = None
+                else:
+                    self.builtin_selected = key
+                self.selected_dim = None
+                self.selected_label = None
+                app.generate_plot()
+            else:
+                self.builtin_selected = None
+            app._label_drag_state = {"type": "auto_label", "key": key, "started": False, "start_x": x, "start_y": y}
+            return
+        if self.edit_mode is not None:
+            self.cancel_edit()
+        if self.selected_label is not None or self.selected_dim is not None or self.builtin_selected is not None:
+            self.selected_label = None
+            self.selected_dim = None
+            self.builtin_selected = None
+            app.generate_plot()
+        app._label_drag_state = {
+            "type": "pan_shape",
+            "started": False,
+            "start_x": x, "start_y": y,
+            "start_px": event.x, "start_py": event.y,
+            "orig_pan_x": app._shape_pan_offset[0],
+            "orig_pan_y": app._shape_pan_offset[1],
+        }
+
+    def on_motion(self, event) -> None:
+        """Handle mouse drag — reposition label or pan canvas."""
+        app = self.app
+        if self.dim_mode and self.dim_first_point is not None:
+            if event.inaxes == app.ax and event.xdata is not None:
+                x1, y1 = self.dim_first_point
+                x2, y2 = event.xdata, event.ydata
+                if self.dim_preview_line:
+                    try:
+                        self.dim_preview_line.remove()
+                    except (ValueError, AttributeError):
+                        pass
+                self.dim_preview_line = app.ax.plot(
+                    [x1, x2], [y1, y2],
+                    color="#4488ff", linestyle="--", linewidth=1.0, alpha=0.6, zorder=20
+                )[0]
+                app.canvas.draw_idle()
+            return
+        if app._label_drag_state is None:
+            return
+        if event.inaxes != app.ax:
+            return
+        x, y = event.xdata, event.ydata
+        if x is None or y is None:
+            return
+        if not app._label_drag_state["started"]:
+            dx = abs(x - app._label_drag_state["start_x"])
+            dy = abs(y - app._label_drag_state["start_y"])
+            xlim = app.ax.get_xlim()
+            ylim = app.ax.get_ylim()
+            min_move = max(xlim[1] - xlim[0], ylim[1] - ylim[0]) * 0.01
+            if dx < min_move and dy < min_move:
+                return
+            app._label_drag_state["started"] = True
+            if not app.history_manager.is_restoring:
+                app._capture_current_state()
+            app.root.config(cursor="fleur")
+        drag_type = app._label_drag_state.get("type", "auto_label")
+        if drag_type == "pan_shape":
+            dpx = event.x - app._label_drag_state["start_px"]
+            dpy = event.y - app._label_drag_state["start_py"]
+            xlim = app.ax.get_xlim()
+            ylim = app.ax.get_ylim()
+            ax_bbox = app.ax.get_window_extent()
+            ax_w_px = ax_bbox.width  if ax_bbox.width  > 1 else 1
+            ax_h_px = ax_bbox.height if ax_bbox.height > 1 else 1
+            data_per_px_x = (xlim[1] - xlim[0]) / ax_w_px
+            data_per_px_y = (ylim[1] - ylim[0]) / ax_h_px
+            app._shape_pan_offset = (
+                app._label_drag_state["orig_pan_x"] - dpx * data_per_px_x,
+                app._label_drag_state["orig_pan_y"] - dpy * data_per_px_y,
+            )
+            app._apply_view_scale_only()
+            return
+        if drag_type == "standalone_label":
+            idx = app._label_drag_state["idx"]
+            dx = x - app._label_drag_state["start_x"]
+            dy = y - app._label_drag_state["start_y"]
+            if idx < len(self.labels):
+                self.labels[idx]["x"] = app._label_drag_state["orig_x"] + dx
+                self.labels[idx]["y"] = app._label_drag_state["orig_y"] + dy
+                self.selected_label = idx
+                app.generate_plot()
+        elif drag_type == "standalone_dim_endpoint":
+            idx = app._label_drag_state["idx"]
+            dx = x - app._label_drag_state["start_x"]
+            dy = y - app._label_drag_state["start_y"]
+            if idx < len(self.dim_lines):
+                dim = self.dim_lines[idx]
+                new_x = app._label_drag_state["orig_x"] + dx
+                new_y = app._label_drag_state["orig_y"] + dy
+                if dim.get("constraint") == "height":
+                    new_x = app._label_drag_state["orig_x"]
+                elif dim.get("constraint") == "width":
+                    new_y = app._label_drag_state["orig_y"]
+                ep = app._label_drag_state["endpoint"]
+                if ep == "p1":
+                    dim["x1"], dim["y1"] = new_x, new_y
+                elif ep == "p2":
+                    dim["x2"], dim["y2"] = new_x, new_y
+                dim["user_dragged"] = True
+                self.selected_dim = idx
+                app.generate_plot()
+        elif drag_type == "standalone_dim_label":
+            idx = app._label_drag_state["idx"]
+            dx = x - app._label_drag_state["start_x"]
+            dy = y - app._label_drag_state["start_y"]
+            if idx < len(self.dim_lines):
+                self.dim_lines[idx]["label_x"] = app._label_drag_state["orig_x"] + dx
+                self.dim_lines[idx]["label_y"] = app._label_drag_state["orig_y"] + dy
+                self.selected_dim = idx
+                app.generate_plot()
+        elif drag_type == "standalone_dim_body":
+            idx = app._label_drag_state["idx"]
+            dx = x - app._label_drag_state["start_x"]
+            dy = y - app._label_drag_state["start_y"]
+            if idx < len(self.dim_lines):
+                dim = self.dim_lines[idx]
+                dim["x1"] = app._label_drag_state["orig_x1"] + dx
+                dim["y1"] = app._label_drag_state["orig_y1"] + dy
+                dim["x2"] = app._label_drag_state["orig_x2"] + dx
+                dim["y2"] = app._label_drag_state["orig_y2"] + dy
+                dim["label_x"] = app._label_drag_state["orig_lx"] + dx
+                dim["label_y"] = app._label_drag_state["orig_ly"] + dy
+                dim["user_dragged"] = True
+                self.selected_dim = idx
+                app.generate_plot()
+        elif drag_type == "builtin_dim_body":
+            key = app._label_drag_state["key"]
+            dx = x - app._label_drag_state["start_x"]
+            dy = y - app._label_drag_state["start_y"]
+            new_dx = app._label_drag_state["orig_dx"] + dx
+            new_dy = app._label_drag_state["orig_dy"] + dy
+            app.label_manager.custom_dim_offsets[key] = (new_dx, new_dy)
+            app.generate_plot()
+        else:
+            key = app._label_drag_state["key"]
+            app.label_manager.set_custom_position(key, x, y)
+            app.generate_plot()
+            text, show = app.label_manager.get_entry_values(key)
+            if text and show:
+                font_size = app.font_size_var.get() if hasattr(app, 'font_size_var') else 12
+                app.ax.text(x, y, text,
+                            fontsize=font_size, color="#0066cc", fontweight="bold",
+                            fontfamily=getattr(app, 'font_family', AppConstants.DEFAULT_FONT_FAMILY),
+                            ha="center", va="center", zorder=AppConstants.LABEL_ZORDER + 2,
+                            bbox=dict(boxstyle="round,pad=0.2", facecolor="white",
+                                     edgecolor="#0066cc", alpha=0.9))
+                app.plot_controller.refresh()
+
+    def on_release(self, event) -> None:
+        """Handle mouse release — finalize label position or toggle selection."""
+        app = self.app
+        if app._label_drag_state is None:
+            return
+        drag_type = app._label_drag_state.get("type", "auto_label")
+        if drag_type == "pan_shape":
+            app._label_drag_state = None
+            return
+        was_dragged = app._label_drag_state.get("started", False)
+        if drag_type == "standalone_label":
+            idx = app._label_drag_state.get("idx")
+            if was_dragged:
+                app.generate_plot()
+                if not app.history_manager.is_restoring:
+                    app._capture_current_state()
+            else:
+                if self.selected_label == idx:
+                    self.selected_label = None
+                else:
+                    self.selected_label = idx
+                self.selected_dim = None
+                app.generate_plot()
+        elif drag_type in ("standalone_dim_endpoint", "standalone_dim_label", "standalone_dim_body"):
+            idx = app._label_drag_state.get("idx")
+            if was_dragged:
+                app.generate_plot()
+                if not app.history_manager.is_restoring:
+                    app._capture_current_state()
+            else:
+                if self.selected_dim == idx:
+                    self.selected_dim = None
+                else:
+                    self.selected_dim = idx
+                self.selected_label = None
+                app.generate_plot()
+        elif drag_type == "builtin_dim_body":
+            if was_dragged:
+                app.generate_plot()
+                if not app.history_manager.is_restoring:
+                    app._capture_current_state()
+        else:
+            if was_dragged:
+                app.generate_plot()
+                if not app.history_manager.is_restoring:
+                    app._capture_current_state()
+        app._label_drag_state = None
+        app.root.config(cursor="arrow")
+        app._label_hover_active = False
+
+    # ── Dim mode ──────────────────────────────────────────────────────────────
+
+    def cancel_dim_mode(self) -> None:
+        """Exit freeform dimension line draw mode."""
+        app = self.app
+        self.dim_mode = False
+        self.dim_first_point = None
+        if self.dim_preview_line:
+            try:
+                self.dim_preview_line.remove()
+            except (ValueError, AttributeError):
+                pass
+            self.dim_preview_line = None
+        app.root.config(cursor="arrow")
+        if hasattr(app, '_standalone_cancel_dim_btn'):
+            app._standalone_cancel_dim_btn.grid_remove()
+            app._standalone_free_btn.grid()
+        app.generate_plot()
+
+    # ── Label / annotation management ────────────────────────────────────────
+
+    def add_label(self) -> None:
+        """Add a freeform text label to the standalone canvas."""
+        app = self.app
+        if not hasattr(app, '_standalone_label_entry'):
+            return
+        text = app._standalone_label_entry.get().strip()
+        if not text:
+            return
+        xlim = app.ax.get_xlim()
+        ylim = app.ax.get_ylim()
+        cx = (xlim[0] + xlim[1]) / 2
+        cy = (ylim[0] + ylim[1]) / 2
+        self.labels.append({"text": text, "x": cx, "y": cy})
+        app._standalone_label_entry.delete(0, tk.END)
+        self.selected_label = len(self.labels) - 1
+        app.generate_plot()
+        if not app.history_manager.is_restoring:
+            app._capture_current_state()
+
+    def add_dim_preset(self, preset_key: str, default_text: str) -> None:
+        """Add a preset dimension line to the standalone canvas."""
+        app = self.app
+        text = default_text
+        if hasattr(app, '_standalone_label_entry'):
+            entry_text = app._standalone_label_entry.get().strip()
+            if entry_text:
+                text = entry_text
+                app._standalone_label_entry.delete(0, tk.END)
+            else:
+                value_key = app._get_preset_value_key(preset_key)
+                if value_key:
+                    val = app.input_controller.get_entry_value(value_key).strip()
+                    if val:
+                        text = val
+        if preset_key == "circumference":
+            current_text, current_show = app.label_manager.get_entry_values("Circumference")
+            if current_text.strip() and current_show:
+                app.label_manager.set_label_text("Circumference", "", False)
+            else:
+                app.label_manager.set_label_text("Circumference", text, True)
+            self.builtin_selected = None
+            self.selected_dim = None
+            self.selected_label = None
+            app.generate_plot()
+            if not app.history_manager.is_restoring:
+                app._capture_current_state(force=True)
+            return
+        radial_shapes = {"Circle", "Sphere", "Hemisphere", "Cylinder", "Cone"}
+        shape = app.shape_var.get()
+        if preset_key in ("radius", "diameter") and shape in radial_shapes:
+            label_key = "Radius" if preset_key == "radius" else "Diameter"
+            other_key = "Diameter" if preset_key == "radius" else "Radius"
+            current_text, current_show = app.label_manager.get_entry_values(label_key)
+            if current_text.strip() and current_show:
+                app.label_manager.set_label_text(label_key, "", False)
+            else:
+                app.label_manager.set_label_text(label_key, text, True)
+                app.label_manager.set_label_text(other_key, "", False)
+            self.selected_dim = None
+            self.selected_label = None
+            app.generate_plot()
+            if not app.history_manager.is_restoring:
+                app._capture_current_state(force=True)
+            return
+        builtin_3d_height = {"Cylinder", "Cone", "Hemisphere"}
+        if preset_key == "height" and shape in builtin_3d_height:
+            current_text, current_show = app.label_manager.get_entry_values("Height")
+            if current_text.strip() and current_show:
+                app.label_manager.set_label_text("Height", "", False)
+            else:
+                app.label_manager.set_label_text("Height", text, True)
+            self.selected_dim = None
+            self.selected_label = None
+            app.generate_plot()
+            if not app.history_manager.is_restoring:
+                app._capture_current_state(force=True)
+            return
+        if preset_key == "slant" and shape == "Cone":
+            current_text, current_show = app.label_manager.get_entry_values("Slant")
+            if current_text.strip() and current_show:
+                app.label_manager.set_label_text("Slant", "", False)
+            else:
+                app.label_manager.set_label_text("Slant", text, True)
+            self.selected_dim = None
+            self.selected_label = None
+            app.generate_plot()
+            if not app.history_manager.is_restoring:
+                app._capture_current_state(force=True)
+            return
+        if preset_key == "height" and shape in ("Triangular Prism", "Tri Prism"):
+            label_key = "Height (Tri)"
+            current_text, current_show = app.label_manager.get_entry_values(label_key)
+            if current_text.strip() and current_show:
+                app.label_manager.set_label_text(label_key, "", False)
+            else:
+                app.label_manager.set_label_text(label_key, text, True)
+            self.selected_dim = None
+            self.selected_label = None
+            app.generate_plot()
+            if not app.history_manager.is_restoring:
+                app._capture_current_state(force=True)
+            return
+        endpoints = app._calc_dim_line_endpoints(preset_key)
+        if endpoints is None:
+            return
+        _perp_presets = {"height", "para_height", "trap_height"}
+        _is_prism = shape in ("Rectangular Prism", "Triangular Prism", "Tri Prism")
+        right_angle_at = "p1" if (preset_key in _perp_presets and not _is_prism) else None
+        self.dim_lines.append({
+            "x1": endpoints["x1"], "y1": endpoints["y1"],
+            "x2": endpoints["x2"], "y2": endpoints["y2"],
+            "text": text,
+            "constraint": endpoints.get("constraint"),
+            "label_x": endpoints["label_x"],
+            "label_y": endpoints["label_y"],
+            "preset_key": preset_key,
+            "user_dragged": False,
+        })
+        self.selected_dim = len(self.dim_lines) - 1
+        self.selected_label = None
+        self.builtin_selected = None
+        app.generate_plot()
+        if not app.history_manager.is_restoring:
+            app._capture_current_state(force=True)
+
+    def remove_annotation(self) -> None:
+        """Remove the selected standalone label, dimension line, or circumference arc."""
+        app = self.app
+        if self.builtin_selected:
+            key = self.builtin_selected
+            app.label_manager.label_texts.pop(key, None)
+            app.label_manager.label_visibility.pop(key, None)
+            app.label_manager.custom_positions.pop(key, None)
+            self.builtin_selected = None
+            app.generate_plot()
+            if not app.history_manager.is_restoring:
+                app._capture_current_state()
+            return
+        if self.selected_dim is not None:
+            if self.selected_dim < len(self.dim_lines):
+                self.dim_lines.pop(self.selected_dim)
+            self.selected_dim = None
+            app.generate_plot()
+            if not app.history_manager.is_restoring:
+                app._capture_current_state()
+            return
+        if self.selected_label is not None:
+            if self.selected_label < len(self.labels):
+                self.labels.pop(self.selected_label)
+            self.selected_label = None
+            app.generate_plot()
+            if not app.history_manager.is_restoring:
+                app._capture_current_state()
+
+    def confirm_label(self) -> None:
+        """Add or update a standalone label/dim depending on edit mode."""
+        if self.edit_mode is not None:
+            self.apply_edit()
+        else:
+            self.add_label()
+
+    def enter_edit(self, edit_type: str, idx: int) -> None:
+        """Enter edit mode: populate entry with existing text, swap button to Update."""
+        app = self.app
+        if edit_type == "builtin":
+            bk = getattr(app, '_builtin_edit_key', None)
+            existing = app.label_manager.label_texts.get(bk, "") if bk else ""
+        elif edit_type == "circ":
+            existing = app.label_manager.label_texts.get("Circumference", "c")
+        elif edit_type == "label" and idx < len(self.labels):
+            existing = self.labels[idx]["text"]
+        elif edit_type == "dim" and idx < len(self.dim_lines):
+            existing = self.dim_lines[idx]["text"]
+        else:
+            return
+        self.edit_mode = {"type": edit_type, "idx": idx}
+        if hasattr(app, '_standalone_label_entry'):
+            app._standalone_label_entry.delete(0, tk.END)
+            app._standalone_label_entry.insert(0, existing)
+            app._standalone_label_entry.focus_set()
+            app._standalone_label_entry.select_range(0, tk.END)
+        if hasattr(app, '_standalone_text_btn'):
+            app._standalone_text_btn.config(text="Update")
+        if hasattr(app, '_standalone_cancel_btn'):
+            app._standalone_cancel_btn.pack(side=tk.LEFT, padx=1)
+
+    def apply_edit(self) -> None:
+        """Apply the edited text to the label or dim line."""
+        app = self.app
+        if self.edit_mode is None:
+            return
+        if not hasattr(app, '_standalone_label_entry'):
+            return
+        new_text = app._standalone_label_entry.get().strip()
+        if not new_text:
+            self.cancel_edit()
+            return
+        edit_type = self.edit_mode["type"]
+        idx = self.edit_mode["idx"]
+        if edit_type == "builtin":
+            bk = getattr(app, '_builtin_edit_key', None)
+            if bk:
+                app.label_manager.set_label_text(bk, new_text, True)
+        elif edit_type == "circ":
+            app.label_manager.set_label_text("Circumference", new_text, True)
+        elif edit_type == "label" and idx < len(self.labels):
+            self.labels[idx]["text"] = new_text
+        elif edit_type == "dim" and idx < len(self.dim_lines):
+            self.dim_lines[idx]["text"] = new_text
+        self.cancel_edit()
+        app.generate_plot()
+        if not app.history_manager.is_restoring:
+            app._capture_current_state()
+
+    def cancel_edit(self) -> None:
+        """Exit edit mode, restore + Text button."""
+        app = self.app
+        self.edit_mode = None
+        if hasattr(app, '_standalone_label_entry'):
+            app._standalone_label_entry.delete(0, tk.END)
+        if hasattr(app, '_standalone_text_btn'):
+            app._standalone_text_btn.config(text="+ Text")
+        if hasattr(app, '_standalone_cancel_btn'):
+            app._standalone_cancel_btn.pack_forget()
+
+    def reset(self) -> None:
+        """Clear all standalone annotation state (called on shape change / clear)."""
+        self.labels = []
+        self.selected_label = None
+        self.label_bboxes = []
+        self.dim_lines = []
+        self.selected_dim = None
+        self.dim_endpoints = []
+        self.dim_label_bboxes = []
+        self.dim_mode = False
+        self.dim_first_point = None
+        self.dim_preview_line = None
+        self.edit_mode = None
+        self.builtin_selected = None
+        self.builtin_dim_endpoints = []
+
+
 class GeometryApp:
     """Main application class for Geometry Forge."""
 
@@ -4721,44 +6740,28 @@ class GeometryApp:
         self._redraw_after_id: Optional[str] = None
         self._slider_after_id: Optional[str] = None
         self._capture_after_id: Optional[str] = None
-        self._composite_positions: dict[int, tuple[float, float]] = {}
-        self._composite_transforms: dict[int, dict] = {}  # {idx: {"flip_h": bool, "flip_v": bool, "base_side": int}}
-        self._composite_selected: set[int] = set()
-        self._composite_labels: list[dict] = []  # [{"text": "h", "x": 5.0, "y": 3.0}, ...]
-        self._composite_label_drag: Optional[dict] = None
-        self._composite_selected_label: Optional[int] = None
-        self._composite_dim_lines: list[CompositeDimLine] = []  # [{"x1","y1","x2","y2","text","constraint":None/"v"/"h"}]
-        self._composite_selected_dim: Optional[int] = None
-        self._composite_dim_mode: Optional[str] = None  # None, "free", "height", "width", "radius"
-        self._composite_dim_first_point: Optional[tuple] = None  # (x, y) of first click
-        self._composite_edit_mode: Optional[dict] = None  # {"type": "label"/"dim", "idx": int}
+        # Composite drag controller — owns positions, transforms, selection,
+        # labels, dim_lines, drag/marquee state, snap, and all action methods.
+        # Instantiated after label_manager / history_manager (below).
         
-        # Standalone freeform labels (composite-style for non-composite shapes)
-        self._standalone_labels: list[dict] = []  # [{"text": "h", "x": 5.0, "y": 3.0}, ...]
-        self._standalone_selected_label: Optional[int] = None
-        self._standalone_label_bboxes: list[tuple] = []
-        self._standalone_dim_lines: list[StandaloneDimLine] = []
-        self._standalone_selected_dim: Optional[int] = None
-        self._standalone_dim_endpoints: list[dict] = []
-        self._standalone_dim_label_bboxes: list[tuple] = []
-        self._standalone_dim_mode: bool = False
-        self._standalone_dim_first_point: Optional[tuple] = None
-        self._standalone_dim_preview_line = None
-        self._builtin_dim_endpoints: list[dict] = []  # [{key, p1, p2}] populated per render
-        self._standalone_edit_mode: Optional[dict] = None  # {"type": "label"/"dim"/"builtin", "idx": int}
-        self._builtin_selected: Optional[str] = None  # Key name of selected built-in label, or None
+        # Standalone annotation controller — owns labels, dim_lines, selection state,
+        # and all four mouse-event handlers for non-composite shapes.
+        # Instantiated after label_manager / history_manager (below) because
+        # __init__ only captures a reference to self (app).
+        # Accessed as self.standalone_ctrl; backward-compat delegates kept below.
         self._shape_bounds: Optional[dict] = None
-        self._composite_drag_state: Optional[dict] = None
-        self._composite_marquee: Optional[dict] = None  # {"start_x", "start_y", "rect_artist"}
-        self._composite_event_ids: list[int] = []
-        self._composite_snap_guides: list = []
         self._standalone_event_ids: list[int] = []
+        self._composite_event_ids: list[int] = []
         self._label_drag_state: Optional[dict] = None
         self._label_hover_active: bool = False
         self._shape_pan_offset: tuple[float, float] = (0.0, 0.0)  # data-unit pan offset
         self._scale_after_id: Optional[str] = None
         self.label_manager = LabelManager()
         self.history_manager = HistoryManager()
+        # Controllers must be instantiated AFTER label_manager / history_manager
+        # and BEFORE any property that routes to them is triggered.
+        self.standalone_ctrl = StandaloneAnnotationController(self)
+        self.composite_ctrl = CompositeDragController(self)
 
         # Central slider/range manager
         self.scale_manager = ScaleManager(self.root)
@@ -4792,6 +6795,331 @@ class GeometryApp:
     def _ui_confirm_yesno(self, title: str, message: str) -> bool:
         logger.info(f"{title}: {message}")
         return bool(messagebox.askyesno(title, message))
+
+    # ── CompositeDragController backward-compat properties ──────────────────
+    # Route all existing self._composite_* accesses to the controller.
+
+    @property
+    def _composite_positions(self): return self.composite_ctrl.positions
+    @_composite_positions.setter
+    def _composite_positions(self, v): self.composite_ctrl.positions = v
+
+    @property
+    def _composite_transforms(self): return self.composite_ctrl.transforms
+    @_composite_transforms.setter
+    def _composite_transforms(self, v): self.composite_ctrl.transforms = v
+
+    @property
+    def _composite_selected(self): return self.composite_ctrl.selected
+    @_composite_selected.setter
+    def _composite_selected(self, v): self.composite_ctrl.selected = v
+
+    @property
+    def _composite_labels(self): return self.composite_ctrl.labels
+    @_composite_labels.setter
+    def _composite_labels(self, v): self.composite_ctrl.labels = v
+
+    @property
+    def _composite_label_drag(self): return self.composite_ctrl.label_drag
+    @_composite_label_drag.setter
+    def _composite_label_drag(self, v): self.composite_ctrl.label_drag = v
+
+    @property
+    def _composite_selected_label(self): return self.composite_ctrl.selected_label
+    @_composite_selected_label.setter
+    def _composite_selected_label(self, v): self.composite_ctrl.selected_label = v
+
+    @property
+    def _composite_dim_lines(self): return self.composite_ctrl.dim_lines
+    @_composite_dim_lines.setter
+    def _composite_dim_lines(self, v): self.composite_ctrl.dim_lines = v
+
+    @property
+    def _composite_selected_dim(self): return self.composite_ctrl.selected_dim
+    @_composite_selected_dim.setter
+    def _composite_selected_dim(self, v): self.composite_ctrl.selected_dim = v
+
+    @property
+    def _composite_dim_mode(self): return self.composite_ctrl.dim_mode
+    @_composite_dim_mode.setter
+    def _composite_dim_mode(self, v): self.composite_ctrl.dim_mode = v
+
+    @property
+    def _composite_dim_first_point(self): return self.composite_ctrl.dim_first_point
+    @_composite_dim_first_point.setter
+    def _composite_dim_first_point(self, v): self.composite_ctrl.dim_first_point = v
+
+    @property
+    def _composite_edit_mode(self): return self.composite_ctrl.edit_mode
+    @_composite_edit_mode.setter
+    def _composite_edit_mode(self, v): self.composite_ctrl.edit_mode = v
+
+    @property
+    def _composite_drag_state(self): return self.composite_ctrl.drag_state
+    @_composite_drag_state.setter
+    def _composite_drag_state(self, v): self.composite_ctrl.drag_state = v
+
+    @property
+    def _composite_marquee(self): return self.composite_ctrl.marquee
+    @_composite_marquee.setter
+    def _composite_marquee(self, v): self.composite_ctrl.marquee = v
+
+    @property
+    def _composite_snap_guides(self): return self.composite_ctrl.snap_guides
+    @_composite_snap_guides.setter
+    def _composite_snap_guides(self, v): self.composite_ctrl.snap_guides = v
+
+    # ── CompositeDragController delegate methods ──────────────────────────────
+
+    def _connect_composite_drag(self) -> None:
+        self.composite_ctrl.connect()
+
+    def _disconnect_composite_drag(self) -> None:
+        self.composite_ctrl.disconnect()
+
+    def _on_composite_press(self, event) -> None:
+        self.composite_ctrl.on_press(event)
+
+    def _on_composite_motion(self, event) -> None:
+        self.composite_ctrl.on_motion(event)
+
+    def _on_composite_release(self, event) -> None:
+        self.composite_ctrl.on_release(event)
+
+    def _translate_patch(self, patch, dx: float, dy: float) -> None:
+        self.composite_ctrl.translate_patch(patch, dx, dy)
+
+    def _calc_snap(self, drag_idx: int, drag_bbox: tuple,
+                   all_bboxes: list[tuple]) -> tuple[float, float, list]:
+        return self.composite_ctrl.calc_snap(drag_idx, drag_bbox, all_bboxes)
+
+    def _update_composite_selection_ui(self) -> None:
+        self.composite_ctrl.update_selection_ui()
+
+    def _get_group_center(self) -> tuple[float, float]:
+        return self.composite_ctrl.get_group_center()
+
+    def _get_group_bbox(self) -> tuple[float, float, float, float]:
+        return self.composite_ctrl.get_group_bbox()
+
+    def _all_shapes_selected(self) -> bool:
+        return self.composite_ctrl.all_shapes_selected()
+
+    def _get_annotations_in_region(self, x_min: float, y_min: float,
+                                    x_max: float, y_max: float,
+                                    include_all: bool = False) -> tuple[list[int], list[int]]:
+        return self.composite_ctrl.get_annotations_in_region(x_min, y_min, x_max, y_max, include_all)
+
+    def _rotate_annotations(self, label_idxs: list[int], dim_idxs: list[int],
+                             cx: float, cy: float, direction: int) -> None:
+        self.composite_ctrl.rotate_annotations(label_idxs, dim_idxs, cx, cy, direction)
+
+    def _flip_annotations_h(self, label_idxs: list[int], dim_idxs: list[int], cx: float) -> None:
+        self.composite_ctrl.flip_annotations_h(label_idxs, dim_idxs, cx)
+
+    def _flip_annotations_v(self, label_idxs: list[int], dim_idxs: list[int], cy: float) -> None:
+        self.composite_ctrl.flip_annotations_v(label_idxs, dim_idxs, cy)
+
+    def _start_dim_line_mode(self, mode: str) -> None:
+        self.composite_ctrl.start_dim_mode(mode)
+
+    def _cancel_dim_line_mode(self) -> None:
+        self.composite_ctrl.cancel_dim_mode()
+
+    def _handle_dim_line_click(self, mx: float, my: float) -> bool:
+        return self.composite_ctrl.handle_dim_click(mx, my)
+
+    def _add_composite_label(self) -> None:
+        self.composite_ctrl.add_label()
+
+    def _remove_composite_label(self) -> None:
+        self.composite_ctrl.remove_label()
+
+    def _confirm_composite_label(self) -> None:
+        self.composite_ctrl.confirm_label()
+
+    def _remove_selected_annotation(self) -> None:
+        self.composite_ctrl.remove_selected_annotation()
+
+    def _enter_composite_edit(self, edit_type: str, idx: int) -> None:
+        self.composite_ctrl.enter_edit(edit_type, idx)
+
+    def _apply_composite_edit(self) -> None:
+        self.composite_ctrl.apply_edit()
+
+    def _cancel_composite_edit(self) -> None:
+        self.composite_ctrl.cancel_edit()
+
+    def _composite_flip(self, axis: str) -> None:
+        self.composite_ctrl.flip(axis)
+
+    def _composite_flip_h(self) -> None:
+        self.composite_ctrl.flip_h()
+
+    def _composite_flip_v(self) -> None:
+        self.composite_ctrl.flip_v()
+
+    def _composite_rotate(self, direction: int) -> None:
+        self.composite_ctrl.rotate(direction)
+
+    # ── end CompositeDragController delegation ────────────────────────────────
+
+    # ── StandaloneAnnotationController backward-compat properties ───────────
+    # These route all existing self._standalone_* / self._builtin_selected
+    # accesses to the controller without changing any call site.
+
+    @property
+    def _standalone_labels(self): return self.standalone_ctrl.labels
+    @_standalone_labels.setter
+    def _standalone_labels(self, v): self.standalone_ctrl.labels = v
+
+    @property
+    def _standalone_selected_label(self): return self.standalone_ctrl.selected_label
+    @_standalone_selected_label.setter
+    def _standalone_selected_label(self, v): self.standalone_ctrl.selected_label = v
+
+    @property
+    def _standalone_label_bboxes(self): return self.standalone_ctrl.label_bboxes
+    @_standalone_label_bboxes.setter
+    def _standalone_label_bboxes(self, v): self.standalone_ctrl.label_bboxes = v
+
+    @property
+    def _standalone_dim_lines(self): return self.standalone_ctrl.dim_lines
+    @_standalone_dim_lines.setter
+    def _standalone_dim_lines(self, v): self.standalone_ctrl.dim_lines = v
+
+    @property
+    def _standalone_selected_dim(self): return self.standalone_ctrl.selected_dim
+    @_standalone_selected_dim.setter
+    def _standalone_selected_dim(self, v): self.standalone_ctrl.selected_dim = v
+
+    @property
+    def _standalone_dim_endpoints(self): return self.standalone_ctrl.dim_endpoints
+    @_standalone_dim_endpoints.setter
+    def _standalone_dim_endpoints(self, v): self.standalone_ctrl.dim_endpoints = v
+
+    @property
+    def _standalone_dim_label_bboxes(self): return self.standalone_ctrl.dim_label_bboxes
+    @_standalone_dim_label_bboxes.setter
+    def _standalone_dim_label_bboxes(self, v): self.standalone_ctrl.dim_label_bboxes = v
+
+    @property
+    def _standalone_dim_mode(self): return self.standalone_ctrl.dim_mode
+    @_standalone_dim_mode.setter
+    def _standalone_dim_mode(self, v): self.standalone_ctrl.dim_mode = v
+
+    @property
+    def _standalone_dim_first_point(self): return self.standalone_ctrl.dim_first_point
+    @_standalone_dim_first_point.setter
+    def _standalone_dim_first_point(self, v): self.standalone_ctrl.dim_first_point = v
+
+    @property
+    def _standalone_dim_preview_line(self): return self.standalone_ctrl.dim_preview_line
+    @_standalone_dim_preview_line.setter
+    def _standalone_dim_preview_line(self, v): self.standalone_ctrl.dim_preview_line = v
+
+    @property
+    def _standalone_edit_mode(self): return self.standalone_ctrl.edit_mode
+    @_standalone_edit_mode.setter
+    def _standalone_edit_mode(self, v): self.standalone_ctrl.edit_mode = v
+
+    @property
+    def _builtin_selected(self): return self.standalone_ctrl.builtin_selected
+    @_builtin_selected.setter
+    def _builtin_selected(self, v): self.standalone_ctrl.builtin_selected = v
+
+    @property
+    def _builtin_dim_endpoints(self): return self.standalone_ctrl.builtin_dim_endpoints
+    @_builtin_dim_endpoints.setter
+    def _builtin_dim_endpoints(self, v): self.standalone_ctrl.builtin_dim_endpoints = v
+
+    # ── StandaloneAnnotationController delegate methods ───────────────────────
+    # Keeps all existing call sites working without modification.
+
+    def _connect_standalone_drag(self) -> None:
+        self.standalone_ctrl.connect()
+
+    def _disconnect_standalone_drag(self) -> None:
+        self.standalone_ctrl.disconnect()
+
+    def _pixels_to_data_pad(self, px: float) -> tuple[float, float]:
+        return self.standalone_ctrl.pixels_to_data_pad(px)
+
+    def _find_nearest_label(self, x: float, y: float, threshold: float = 0.8) -> Optional[str]:
+        return self.standalone_ctrl.find_nearest_label(x, y, threshold)
+
+    def _on_standalone_label_hover(self, event) -> None:
+        self.standalone_ctrl.on_hover(event)
+
+    def _on_standalone_label_press(self, event) -> None:
+        self.standalone_ctrl.on_press(event)
+
+    def _on_standalone_label_motion(self, event) -> None:
+        self.standalone_ctrl.on_motion(event)
+
+    def _on_standalone_label_release(self, event) -> None:
+        self.standalone_ctrl.on_release(event)
+
+    def _cancel_standalone_dim_mode(self) -> None:
+        self.standalone_ctrl.cancel_dim_mode()
+
+    def _add_standalone_label(self) -> None:
+        self.standalone_ctrl.add_label()
+
+    def _add_standalone_dim_preset(self, preset_key: str, default_text: str) -> None:
+        self.standalone_ctrl.add_dim_preset(preset_key, default_text)
+
+    def _remove_standalone_annotation(self) -> None:
+        self.standalone_ctrl.remove_annotation()
+
+    def _confirm_standalone_label(self) -> None:
+        self.standalone_ctrl.confirm_label()
+
+    def _enter_standalone_edit(self, edit_type: str, idx: int) -> None:
+        self.standalone_ctrl.enter_edit(edit_type, idx)
+
+    def _apply_standalone_edit(self) -> None:
+        self.standalone_ctrl.apply_edit()
+
+    def _cancel_standalone_edit(self) -> None:
+        self.standalone_ctrl.cancel_edit()
+
+    def _get_preset_value_key(self, preset_key: str) -> Optional[str]:
+        """Map a dim line preset key to the Custom mode entry key for value population."""
+        shape = self.shape_var.get()
+        tri_type = self.triangle_type_var.get() if hasattr(self, 'triangle_type_var') else "Custom"
+        mapping = {
+            "Rectangle": {"height": "Width", "width": "Length"},
+            "Parallelogram": {
+                "para_height": "Height", "para_base": "Length",
+                "para_side_l": "Side", "para_side_r": "Side",
+            },
+            "Trapezoid": {
+                "trap_height": "Height", "trap_base": "Bottom Base",
+                "trap_top": "Top Base", "trap_side_l": "Left Side", "trap_side_r": "Right Side",
+            },
+            "Cylinder": {"height": "Height", "radius": "Radius", "diameter": "Diameter"},
+            "Cone": {"height": "Height", "radius": "Radius", "diameter": "Diameter"},
+            "Rectangular Prism": {
+                "height": "Height", "width": "Length (Front)", "length": "Width (Side)",
+            },
+            "Triangular Prism": {
+                "height": "Height", "tri_base": "Base", "tri_length": "Length",
+            },
+            "Tri Prism": {
+                "height": "Height", "tri_base": "Base", "tri_length": "Length",
+            },
+        }
+        if shape == "Triangle" and tri_type == "Custom":
+            tri_mapping = {
+                "height": "Height", "width": "Base Width",
+                "side_l": "Left Side", "side_r": "Right Side",
+            }
+            return tri_mapping.get(preset_key)
+        shape_map = mapping.get(shape, {})
+        return shape_map.get(preset_key)
+
+    # ── end StandaloneAnnotationController delegation ─────────────────────────
 
     def _setup_data(self) -> None:
         self.shape_data = {
@@ -5932,587 +8260,6 @@ class GeometryApp:
             self.col_transforms.grid_remove()
 
     # --------------------------------------------------
-    def _connect_standalone_drag(self) -> None:
-        """Connect mouse events for standalone label dragging."""
-        self._disconnect_standalone_drag()
-        self._standalone_event_ids = [
-            self.canvas.mpl_connect('button_press_event', self._on_standalone_label_press),
-            self.canvas.mpl_connect('motion_notify_event', self._on_standalone_label_motion),
-            self.canvas.mpl_connect('button_release_event', self._on_standalone_label_release),
-            self.canvas.mpl_connect('motion_notify_event', self._on_standalone_label_hover),
-        ]
-    
-    def _disconnect_standalone_drag(self) -> None:
-        """Disconnect standalone label drag events."""
-        for eid in self._standalone_event_ids:
-            try:
-                self.canvas.mpl_disconnect(eid)
-            except Exception:
-                pass
-        self._standalone_event_ids = []
-        self._label_drag_state = None
-    
-    def _pixels_to_data_pad(self, px: float) -> tuple[float, float]:
-        """Convert a pixel size to data-unit padding (x, y) based on current axis state."""
-        fig_w = self.fig.get_figwidth() * self.fig.dpi
-        fig_h = self.fig.get_figheight() * self.fig.dpi
-        ax_pos = self.ax.get_position()
-        ax_px_w = fig_w * ax_pos.width
-        ax_px_h = fig_h * ax_pos.height
-        xlim = self.ax.get_xlim()
-        ylim = self.ax.get_ylim()
-        data_w = xlim[1] - xlim[0]
-        data_h = ylim[1] - ylim[0]
-        pad_x = px * data_w / ax_px_w if ax_px_w > 0 else 0.1
-        pad_y = px * data_h / ax_px_h if ax_px_h > 0 else 0.1
-        return pad_x, pad_y
-
-    def _find_nearest_label(self, x: float, y: float, threshold: float = 0.8) -> Optional[str]:
-        """Find the nearest label key to the given data coordinates."""
-        if not self.label_manager.auto_positions:
-            return None
-        
-        best_key = None
-        best_dist = threshold
-        
-        # Get current axis limits to scale threshold proportionally
-        xlim = self.ax.get_xlim()
-        ylim = self.ax.get_ylim()
-        x_range = xlim[1] - xlim[0]
-        y_range = ylim[1] - ylim[0]
-        pad_x, pad_y = self._pixels_to_data_pad(3)
-        scale = max(pad_x, pad_y)
-        if scale > 0:
-            best_dist = scale
-        
-        for key, pos_data in self.label_manager.auto_positions.items():
-            lx, ly = pos_data[0], pos_data[1]
-            # Use custom position if set
-            if key in self.label_manager.custom_positions:
-                lx, ly = self.label_manager.custom_positions[key]
-            # Check if label is visible
-            text, show = self.label_manager.get_entry_values(key)
-            if not (text and show):
-                continue
-            dist = math.sqrt((x - lx)**2 + (y - ly)**2)
-            if dist < best_dist:
-                best_dist = dist
-                best_key = key
-        
-        return best_key
-    
-    def _on_standalone_label_hover(self, event) -> None:
-        """Change cursor when hovering over a draggable label or dim line."""
-        if self._label_drag_state is not None:
-            return
-        if self._standalone_dim_mode:
-            return
-        if self._is_composite_shape():
-            if getattr(self, '_label_hover_active', False):
-                self.root.config(cursor="arrow")
-                self._label_hover_active = False
-            return
-        if not self.shape_var.get():
-            if getattr(self, '_label_hover_active', False):
-                self.root.config(cursor="arrow")
-                self._label_hover_active = False
-            return
-        if event.inaxes != self.ax:
-            if getattr(self, '_label_hover_active', False):
-                self.root.config(cursor="arrow")
-                self._label_hover_active = False
-            return
-
-        x, y = event.xdata, event.ydata
-        if x is None or y is None:
-            if getattr(self, '_label_hover_active', False):
-                self.root.config(cursor="arrow")
-                self._label_hover_active = False
-            return
-
-        hit = False
-
-        # Auto-positioned shape labels
-        if self._find_nearest_label(x, y):
-            hit = True
-
-        # Standalone freeform label bboxes
-        if not hit:
-            for bbox in self._standalone_label_bboxes:
-                if bbox[0] <= x <= bbox[2] and bbox[1] <= y <= bbox[3]:
-                    hit = True
-                    break
-
-        # Standalone dim label bboxes
-        if not hit:
-            for bbox in self._standalone_dim_label_bboxes:
-                if bbox[0] <= x <= bbox[2] and bbox[1] <= y <= bbox[3]:
-                    hit = True
-                    break
-
-        # Standalone dim endpoints and body
-        if not hit:
-            hit_radius = max((self.ax.get_xlim()[1] - self.ax.get_xlim()[0]) * 0.015, 0.2)
-            for ep in self._standalone_dim_endpoints:
-                p1, p2 = ep["p1"], ep["p2"]
-                for pt in (p1, p2):
-                    if math.sqrt((x - pt[0])**2 + (y - pt[1])**2) < hit_radius:
-                        hit = True
-                        break
-                if not hit:
-                    dx, dy = p2[0] - p1[0], p2[1] - p1[1]
-                    seg_len_sq = dx*dx + dy*dy
-                    if seg_len_sq > 0:
-                        t = max(0.0, min(1.0, ((x - p1[0])*dx + (y - p1[1])*dy) / seg_len_sq))
-                        dist = math.sqrt((x - p1[0] - t*dx)**2 + (y - p1[1] - t*dy)**2)
-                        if dist < hit_radius:
-                            hit = True
-                if hit:
-                    break
-
-        # Builtin dim line endpoints and body
-        if not hit:
-            hit_radius = max((self.ax.get_xlim()[1] - self.ax.get_xlim()[0]) * 0.015, 0.2)
-            for ep in self._builtin_dim_endpoints:
-                p1, p2 = ep["p1"], ep["p2"]
-                dx, dy = p2[0] - p1[0], p2[1] - p1[1]
-                seg_len_sq = dx*dx + dy*dy
-                if seg_len_sq > 0:
-                    t = max(0.0, min(1.0, ((x - p1[0])*dx + (y - p1[1])*dy) / seg_len_sq))
-                    dist = math.sqrt((x - p1[0] - t*dx)**2 + (y - p1[1] - t*dy)**2)
-                    if dist < hit_radius:
-                        hit = True
-                        break
-
-        if hit:
-            if not getattr(self, '_label_hover_active', False):
-                self.root.config(cursor="fleur")
-                self._label_hover_active = True
-        else:
-            if getattr(self, '_label_hover_active', False):
-                self.root.config(cursor="arrow")
-                self._label_hover_active = False
-    
-    def _on_standalone_label_press(self, event) -> None:
-        """Handle mouse press — start label drag if a label is hit."""
-        if event.inaxes != self.ax or event.button != 1:
-            return
-        # Skip if in composite mode
-        if self._is_composite_shape():
-            return
-        if not self.shape_var.get():
-            return
-
-        # Handle freeform dim line draw mode
-        if self._standalone_dim_mode:
-            x, y = event.xdata, event.ydata
-            if x is None or y is None:
-                return
-            if self._standalone_dim_first_point is None:
-                self._standalone_dim_first_point = (x, y)
-            else:
-                x1, y1 = self._standalone_dim_first_point
-                text = self._standalone_label_entry.get().strip() or "f"
-                mid_x = (x1 + x) / 2
-                mid_y = (y1 + y) / 2
-                if not self.history_manager.is_restoring:
-                    self._capture_current_state()
-                self._standalone_dim_lines.append({
-                    "x1": x1, "y1": y1, "x2": x, "y2": y,
-                    "text": text,
-                    "preset_key": None,
-                    "user_dragged": True,
-                    "label_x": mid_x,
-                    "label_y": mid_y,
-                })
-                self._standalone_selected_dim = len(self._standalone_dim_lines) - 1
-                self._cancel_standalone_dim_mode()
-                if not self.history_manager.is_restoring:
-                    self._capture_current_state()
-            return
-        
-        x, y = event.xdata, event.ydata
-        if x is None or y is None:
-            return
-        
-        # Double-click on a label or dim line label → enter edit mode
-        if getattr(event, 'dblclick', False):
-            # Check built-in labels (Circumference, Radius, Diameter, Height, etc.)
-            hit_key = self._find_nearest_label(x, y)
-            if hit_key and hit_key in AppConstants.BUILTIN_LABEL_KEYS:
-                t, s = self.label_manager.get_entry_values(hit_key)
-                if t and s:
-                    self._builtin_edit_key = hit_key
-                    self._enter_standalone_edit("builtin", 0)
-                    return
-            for idx in reversed(range(len(self._standalone_label_bboxes))):
-                bbox = self._standalone_label_bboxes[idx]
-                if bbox[0] <= x <= bbox[2] and bbox[1] <= y <= bbox[3]:
-                    self._enter_standalone_edit("label", idx)
-                    return
-            for idx in reversed(range(len(self._standalone_dim_label_bboxes))):
-                bbox = self._standalone_dim_label_bboxes[idx]
-                if bbox[0] <= x <= bbox[2] and bbox[1] <= y <= bbox[3]:
-                    self._enter_standalone_edit("dim", idx)
-                    return
-        
-        # Check standalone dim line labels first
-        for idx in reversed(range(len(self._standalone_dim_label_bboxes))):
-            bbox = self._standalone_dim_label_bboxes[idx]
-            if bbox[0] <= x <= bbox[2] and bbox[1] <= y <= bbox[3]:
-                dim = self._standalone_dim_lines[idx]
-                self._builtin_selected = None
-                self._label_drag_state = {
-                    "type": "standalone_dim_label",
-                    "idx": idx,
-                    "started": False,
-                    "start_x": x,
-                    "start_y": y,
-                    "orig_x": dim.get("label_x", (dim["x1"] + dim["x2"]) / 2),
-                    "orig_y": dim.get("label_y", (dim["y1"] + dim["y2"]) / 2),
-                }
-                return
-        
-        # Check standalone dim line endpoints
-        for idx in reversed(range(len(self._standalone_dim_endpoints))):
-            ep = self._standalone_dim_endpoints[idx]
-            for ep_name, ep_pos in [("p1", ep["p1"]), ("p2", ep["p2"])]:
-                if math.sqrt((x - ep_pos[0])**2 + (y - ep_pos[1])**2) < max(
-                    (self.ax.get_xlim()[1] - self.ax.get_xlim()[0]) * 0.02, 0.3):
-                    self._standalone_selected_dim = idx
-                    self._standalone_selected_label = None
-                    self._builtin_selected = None
-                    self.generate_plot()
-                    dim = self._standalone_dim_lines[idx]
-                    self._label_drag_state = {
-                        "type": "standalone_dim_endpoint",
-                        "idx": idx,
-                        "endpoint": ep_name,
-                        "started": False,
-                        "start_x": x,
-                        "start_y": y,
-                        "orig_x": ep_pos[0],
-                        "orig_y": ep_pos[1],
-                    }
-                    return
-        
-        # Check standalone dim line body (for whole-line drag)
-        for idx in reversed(range(len(self._standalone_dim_endpoints))):
-            ep = self._standalone_dim_endpoints[idx]
-            p1, p2 = ep["p1"], ep["p2"]
-            # Point-to-segment distance check
-            dx, dy = p2[0] - p1[0], p2[1] - p1[1]
-            seg_len_sq = dx * dx + dy * dy
-            if seg_len_sq > 0:
-                t = max(0, min(1, ((x - p1[0]) * dx + (y - p1[1]) * dy) / seg_len_sq))
-                proj_x = p1[0] + t * dx
-                proj_y = p1[1] + t * dy
-                dist = math.sqrt((x - proj_x)**2 + (y - proj_y)**2)
-                hit_radius = max((self.ax.get_xlim()[1] - self.ax.get_xlim()[0]) * 0.015, 0.2)
-                if dist < hit_radius and 0.05 < t < 0.95:
-                    self._standalone_selected_dim = idx
-                    self._standalone_selected_label = None
-                    self._builtin_selected = None
-                    self.generate_plot()
-                    dim = self._standalone_dim_lines[idx]
-                    self._label_drag_state = {
-                        "type": "standalone_dim_body",
-                        "idx": idx,
-                        "started": False,
-                        "start_x": x,
-                        "start_y": y,
-                        "orig_x1": dim["x1"], "orig_y1": dim["y1"],
-                        "orig_x2": dim["x2"], "orig_y2": dim["y2"],
-                        "orig_lx": dim.get("label_x", (dim["x1"] + dim["x2"]) / 2),
-                        "orig_ly": dim.get("label_y", (dim["y1"] + dim["y2"]) / 2),
-                    }
-                    return
-        
-        # Check built-in dim lines (body drag)
-        hit_radius = max((self.ax.get_xlim()[1] - self.ax.get_xlim()[0]) * 0.015, 0.2)
-        for ep in self._builtin_dim_endpoints:
-            p1, p2 = ep["p1"], ep["p2"]
-            dx_seg, dy_seg = p2[0] - p1[0], p2[1] - p1[1]
-            seg_len_sq = dx_seg * dx_seg + dy_seg * dy_seg
-            if seg_len_sq > 0:
-                t = max(0.0, min(1.0, ((x - p1[0]) * dx_seg + (y - p1[1]) * dy_seg) / seg_len_sq))
-                proj_x = p1[0] + t * dx_seg
-                proj_y = p1[1] + t * dy_seg
-                dist = math.sqrt((x - proj_x) ** 2 + (y - proj_y) ** 2)
-                if dist < hit_radius:
-                    self._builtin_selected = ep["key"]
-                    self._standalone_selected_dim = None
-                    self._standalone_selected_label = None
-                    self.generate_plot()
-                    cur_off = self.label_manager.custom_dim_offsets.get(ep["key"], (0.0, 0.0))
-                    self._label_drag_state = {
-                        "type": "builtin_dim_body",
-                        "key": ep["key"],
-                        "started": False,
-                        "start_x": x,
-                        "start_y": y,
-                        "orig_dx": cur_off[0],
-                        "orig_dy": cur_off[1],
-                    }
-                    return
-
-        # Check freeform standalone labels
-        for idx in reversed(range(len(self._standalone_label_bboxes))):
-            bbox = self._standalone_label_bboxes[idx]
-            if bbox[0] <= x <= bbox[2] and bbox[1] <= y <= bbox[3]:
-                self._label_drag_state = {
-                    "type": "standalone_label",
-                    "idx": idx,
-                    "started": False,
-                    "start_x": x,
-                    "start_y": y,
-                    "orig_x": self._standalone_labels[idx]["x"],
-                    "orig_y": self._standalone_labels[idx]["y"],
-                }
-                return
-        
-        # Then check auto-positioned shape labels
-        key = self._find_nearest_label(x, y)
-        if key:
-            if key in AppConstants.BUILTIN_LABEL_KEYS:
-                # Toggle selection for built-in labels
-                if self._builtin_selected == key:
-                    self._builtin_selected = None
-                else:
-                    self._builtin_selected = key
-                self._standalone_selected_dim = None
-                self._standalone_selected_label = None
-                self.generate_plot()
-            else:
-                self._builtin_selected = None
-            self._label_drag_state = {"type": "auto_label", "key": key, "started": False, "start_x": x, "start_y": y}
-            return
-        
-        # Clicked empty space — start a pan drag (drag shape around canvas)
-        if self._standalone_edit_mode is not None:
-            self._cancel_standalone_edit()
-        if self._standalone_selected_label is not None or self._standalone_selected_dim is not None or self._builtin_selected is not None:
-            self._standalone_selected_label = None
-            self._standalone_selected_dim = None
-            self._builtin_selected = None
-            self.generate_plot()
-        # Begin pan: record start position in PIXEL coords (not data coords)
-        # B25 fix: xdata/ydata shift as the view is panned, so using them for
-        # delta computation causes runaway shrinking. Pixel coords are stable.
-        self._label_drag_state = {
-            "type": "pan_shape",
-            "started": False,
-            "start_x": x, "start_y": y,
-            "start_px": event.x, "start_py": event.y,
-            "orig_pan_x": self._shape_pan_offset[0],
-            "orig_pan_y": self._shape_pan_offset[1],
-        }
-    
-    def _on_standalone_label_motion(self, event) -> None:
-        """Handle mouse drag — reposition label or pan canvas."""
-        # Ghost preview for freeform dim line draw mode
-        if self._standalone_dim_mode and self._standalone_dim_first_point is not None:
-            if event.inaxes == self.ax and event.xdata is not None:
-                x1, y1 = self._standalone_dim_first_point
-                x2, y2 = event.xdata, event.ydata
-                if self._standalone_dim_preview_line:
-                    try:
-                        self._standalone_dim_preview_line.remove()
-                    except (ValueError, AttributeError):
-                        pass
-                self._standalone_dim_preview_line = self.ax.plot(
-                    [x1, x2], [y1, y2],
-                    color="#4488ff", linestyle="--", linewidth=1.0, alpha=0.6, zorder=20
-                )[0]
-                self.canvas.draw_idle()
-            return
-
-        if self._label_drag_state is None:
-            return
-        if event.inaxes != self.ax:
-            return
-        
-        x, y = event.xdata, event.ydata
-        if x is None or y is None:
-            return
-        
-        # Require minimum movement to start drag (prevents accidental repositioning on click)
-        if not self._label_drag_state["started"]:
-            dx = abs(x - self._label_drag_state["start_x"])
-            dy = abs(y - self._label_drag_state["start_y"])
-            xlim = self.ax.get_xlim()
-            ylim = self.ax.get_ylim()
-            min_move = max(xlim[1] - xlim[0], ylim[1] - ylim[0]) * 0.01
-            if dx < min_move and dy < min_move:
-                return
-            self._label_drag_state["started"] = True
-            # Capture state before drag begins
-            if not self.history_manager.is_restoring:
-                self._capture_current_state()
-            self.root.config(cursor="fleur")
-        
-        drag_type = self._label_drag_state.get("type", "auto_label")
-
-        if drag_type == "pan_shape":
-            # B25 fix: compute delta in pixels, convert to data units using current axis scale.
-            # Using data coords (xdata) would drift because _apply_view_scale changes xlim/ylim
-            # between events, shifting xdata for the same physical pixel position.
-            dpx = event.x - self._label_drag_state["start_px"]
-            dpy = event.y - self._label_drag_state["start_py"]
-            xlim = self.ax.get_xlim()
-            ylim = self.ax.get_ylim()
-            ax_bbox = self.ax.get_window_extent()
-            ax_w_px = ax_bbox.width  if ax_bbox.width  > 1 else 1
-            ax_h_px = ax_bbox.height if ax_bbox.height > 1 else 1
-            data_per_px_x = (xlim[1] - xlim[0]) / ax_w_px
-            data_per_px_y = (ylim[1] - ylim[0]) / ax_h_px
-            # pan_x is added to the view CENTER in _apply_view_scale, so positive pan_x
-            # shifts the window right — making the shape appear to move LEFT. To move the
-            # shape right when dragging right (positive dpx), pan_x must decrease.
-            # Y: screen y increases downward but data y increases upward, so signs match.
-            self._shape_pan_offset = (
-                self._label_drag_state["orig_pan_x"] - dpx * data_per_px_x,
-                self._label_drag_state["orig_pan_y"] - dpy * data_per_px_y,
-            )
-            self._apply_view_scale_only()
-            return
-        
-        if drag_type == "standalone_label":
-            idx = self._label_drag_state["idx"]
-            dx = x - self._label_drag_state["start_x"]
-            dy = y - self._label_drag_state["start_y"]
-            if idx < len(self._standalone_labels):
-                self._standalone_labels[idx]["x"] = self._label_drag_state["orig_x"] + dx
-                self._standalone_labels[idx]["y"] = self._label_drag_state["orig_y"] + dy
-                self._standalone_selected_label = idx
-                self.generate_plot()
-        elif drag_type == "standalone_dim_endpoint":
-            idx = self._label_drag_state["idx"]
-            dx = x - self._label_drag_state["start_x"]
-            dy = y - self._label_drag_state["start_y"]
-            if idx < len(self._standalone_dim_lines):
-                dim = self._standalone_dim_lines[idx]
-                new_x = self._label_drag_state["orig_x"] + dx
-                new_y = self._label_drag_state["orig_y"] + dy
-                if dim.get("constraint") == "height":
-                    new_x = self._label_drag_state["orig_x"]
-                elif dim.get("constraint") == "width":
-                    new_y = self._label_drag_state["orig_y"]
-                ep = self._label_drag_state["endpoint"]
-                if ep == "p1":
-                    dim["x1"], dim["y1"] = new_x, new_y
-                elif ep == "p2":
-                    dim["x2"], dim["y2"] = new_x, new_y
-                # Mark as user-positioned so snap doesn't overwrite the
-                # dragged endpoint on the next generate_plot() call.
-                dim["user_dragged"] = True
-                self._standalone_selected_dim = idx
-                self.generate_plot()
-        elif drag_type == "standalone_dim_label":
-            idx = self._label_drag_state["idx"]
-            dx = x - self._label_drag_state["start_x"]
-            dy = y - self._label_drag_state["start_y"]
-            if idx < len(self._standalone_dim_lines):
-                self._standalone_dim_lines[idx]["label_x"] = self._label_drag_state["orig_x"] + dx
-                self._standalone_dim_lines[idx]["label_y"] = self._label_drag_state["orig_y"] + dy
-                self._standalone_selected_dim = idx
-                self.generate_plot()
-        elif drag_type == "standalone_dim_body":
-            idx = self._label_drag_state["idx"]
-            dx = x - self._label_drag_state["start_x"]
-            dy = y - self._label_drag_state["start_y"]
-            if idx < len(self._standalone_dim_lines):
-                dim = self._standalone_dim_lines[idx]
-                dim["x1"] = self._label_drag_state["orig_x1"] + dx
-                dim["y1"] = self._label_drag_state["orig_y1"] + dy
-                dim["x2"] = self._label_drag_state["orig_x2"] + dx
-                dim["y2"] = self._label_drag_state["orig_y2"] + dy
-                dim["label_x"] = self._label_drag_state["orig_lx"] + dx
-                dim["label_y"] = self._label_drag_state["orig_ly"] + dy
-                dim["user_dragged"] = True
-                self._standalone_selected_dim = idx
-                self.generate_plot()
-        elif drag_type == "builtin_dim_body":
-            key = self._label_drag_state["key"]
-            dx = x - self._label_drag_state["start_x"]
-            dy = y - self._label_drag_state["start_y"]
-            new_dx = self._label_drag_state["orig_dx"] + dx
-            new_dy = self._label_drag_state["orig_dy"] + dy
-            self.label_manager.custom_dim_offsets[key] = (new_dx, new_dy)
-            self.generate_plot()
-        else:
-            key = self._label_drag_state["key"]
-            self.label_manager.set_custom_position(key, x, y)
-            self.generate_plot()
-            
-            # Draw blue selection highlight matching composite label style
-            text, show = self.label_manager.get_entry_values(key)
-            if text and show:
-                font_size = self.font_size_var.get() if hasattr(self, 'font_size_var') else 12
-                self.ax.text(x, y, text,
-                            fontsize=font_size, color="#0066cc", fontweight="bold",
-                            fontfamily=getattr(self, 'font_family', AppConstants.DEFAULT_FONT_FAMILY),
-                            ha="center", va="center", zorder=AppConstants.LABEL_ZORDER + 2,
-                            bbox=dict(boxstyle="round,pad=0.2", facecolor="white",
-                                     edgecolor="#0066cc", alpha=0.9))
-                self.plot_controller.refresh()
-    
-    def _on_standalone_label_release(self, event) -> None:
-        """Handle mouse release — finalize label position or toggle selection."""
-        if self._label_drag_state is None:
-            return
-        
-        drag_type = self._label_drag_state.get("type", "auto_label")
-
-        if drag_type == "pan_shape":
-            # Pan is fully handled in motion; on release just clear drag state.
-            self._label_drag_state = None
-            return
-        was_dragged = self._label_drag_state.get("started", False)
-        
-        if drag_type == "standalone_label":
-            idx = self._label_drag_state.get("idx")
-            if was_dragged:
-                self.generate_plot()
-                if not self.history_manager.is_restoring:
-                    self._capture_current_state()
-            else:
-                if self._standalone_selected_label == idx:
-                    self._standalone_selected_label = None
-                else:
-                    self._standalone_selected_label = idx
-                self._standalone_selected_dim = None
-                self.generate_plot()
-        elif drag_type in ("standalone_dim_endpoint", "standalone_dim_label", "standalone_dim_body"):
-            idx = self._label_drag_state.get("idx")
-            if was_dragged:
-                # After dragging a freeform line, update its rel coords so it continues
-                # to track shape transforms from the new dragged position.
-                self.generate_plot()
-                if not self.history_manager.is_restoring:
-                    self._capture_current_state()
-            else:
-                if self._standalone_selected_dim == idx:
-                    self._standalone_selected_dim = None
-                else:
-                    self._standalone_selected_dim = idx
-                self._standalone_selected_label = None
-                self.generate_plot()
-        elif drag_type == "builtin_dim_body":
-            if was_dragged:
-                self.generate_plot()
-                if not self.history_manager.is_restoring:
-                    self._capture_current_state()
-        else:
-            if was_dragged:
-                self.generate_plot()
-                if not self.history_manager.is_restoring:
-                    self._capture_current_state()
-        
-        self._label_drag_state = None
-        self.root.config(cursor="arrow")
-        self._label_hover_active = False
-    
     def _on_escape_pressed(self, event) -> None:
         if self._standalone_dim_mode:
             self._cancel_standalone_dim_mode()
@@ -7194,320 +8941,6 @@ class GeometryApp:
             self._standalone_free_btn.grid_remove()
             self._standalone_cancel_dim_btn.grid()
 
-    def _cancel_standalone_dim_mode(self) -> None:
-        """Exit freeform dimension line draw mode."""
-        self._standalone_dim_mode = False
-        self._standalone_dim_first_point = None
-        if self._standalone_dim_preview_line:
-            try:
-                self._standalone_dim_preview_line.remove()
-            except (ValueError, AttributeError):
-                pass
-            self._standalone_dim_preview_line = None
-        self.root.config(cursor="arrow")
-        if hasattr(self, '_standalone_cancel_dim_btn'):
-            self._standalone_cancel_dim_btn.grid_remove()
-            self._standalone_free_btn.grid()
-        self.generate_plot()
-
-    def _add_standalone_label(self) -> None:
-        """Add a freeform text label to the standalone canvas."""
-        if not hasattr(self, '_standalone_label_entry'):
-            return
-        text = self._standalone_label_entry.get().strip()
-        if not text:
-            return
-        
-        # Place label at the center of the current view
-        xlim = self.ax.get_xlim()
-        ylim = self.ax.get_ylim()
-        cx = (xlim[0] + xlim[1]) / 2
-        cy = (ylim[0] + ylim[1]) / 2
-        
-        self._standalone_labels.append({"text": text, "x": cx, "y": cy})
-        self._standalone_label_entry.delete(0, tk.END)
-        self._standalone_selected_label = len(self._standalone_labels) - 1
-        
-        self.generate_plot()
-        if not self.history_manager.is_restoring:
-            self._capture_current_state()
-
-    def _add_standalone_dim_preset(self, preset_key: str, default_text: str) -> None:
-        """Add a preset dimension line to the standalone canvas."""
-        # Use text from entry if provided, otherwise try Custom value, otherwise preset default
-        text = default_text
-        if hasattr(self, '_standalone_label_entry'):
-            entry_text = self._standalone_label_entry.get().strip()
-            if entry_text:
-                text = entry_text
-                self._standalone_label_entry.delete(0, tk.END)
-            else:
-                # Populate from the matching Custom mode entry value (works for all shapes
-                # with Custom mode, including Triangle Custom type)
-                value_key = self._get_preset_value_key(preset_key)
-                if value_key:
-                    val = self.input_controller.get_entry_value(value_key).strip()
-                    if val:
-                        text = val
-        
-        # Circumference uses the built-in arc (not a straight dim line)
-        if preset_key == "circumference":
-            current_text, current_show = self.label_manager.get_entry_values("Circumference")
-            if current_text.strip() and current_show:
-                self.label_manager.set_label_text("Circumference", "", False)
-            else:
-                self.label_manager.set_label_text("Circumference", text, True)
-            self._builtin_selected = None
-            self._standalone_selected_dim = None
-            self._standalone_selected_label = None
-            self.generate_plot()
-            if not self.history_manager.is_restoring:
-                self._capture_current_state(force=True)
-            return
-        
-        # Radius/Diameter/Height on radial shapes use built-in rendering with mutual exclusivity
-        radial_shapes = {"Circle", "Sphere", "Hemisphere", "Cylinder", "Cone"}
-        shape = self.shape_var.get()
-        if preset_key in ("radius", "diameter") and shape in radial_shapes:
-            label_key = "Radius" if preset_key == "radius" else "Diameter"
-            other_key = "Diameter" if preset_key == "radius" else "Radius"
-            
-            current_text, current_show = self.label_manager.get_entry_values(label_key)
-            
-            if current_text.strip() and current_show:
-                # Toggle OFF
-                self.label_manager.set_label_text(label_key, "", False)
-            else:
-                # Toggle ON and turn the other OFF
-                self.label_manager.set_label_text(label_key, text, True)
-                self.label_manager.set_label_text(other_key, "", False)
-                
-            self._standalone_selected_dim = None
-            self._standalone_selected_label = None
-            self.generate_plot()
-            if not self.history_manager.is_restoring:
-                self._capture_current_state(force=True)
-            return
-        
-        # Height/Slant on 3D shapes use built-in rendering
-        builtin_3d_height = {"Cylinder", "Cone", "Hemisphere"}
-        if preset_key == "height" and shape in builtin_3d_height:
-            current_text, current_show = self.label_manager.get_entry_values("Height")
-            if current_text.strip() and current_show:
-                self.label_manager.set_label_text("Height", "", False)
-            else:
-                self.label_manager.set_label_text("Height", text, True)
-            self._standalone_selected_dim = None
-            self._standalone_selected_label = None
-            self.generate_plot()
-            if not self.history_manager.is_restoring:
-                self._capture_current_state(force=True)
-            return
-        
-        # Slant on Cone uses built-in rendering
-        if preset_key == "slant" and shape == "Cone":
-            current_text, current_show = self.label_manager.get_entry_values("Slant")
-            if current_text.strip() and current_show:
-                self.label_manager.set_label_text("Slant", "", False)
-            else:
-                self.label_manager.set_label_text("Slant", text, True)
-            self._standalone_selected_dim = None
-            self._standalone_selected_label = None
-            self.generate_plot()
-            if not self.history_manager.is_restoring:
-                self._capture_current_state(force=True)
-            return
-        
-        # Triangular Prism height uses built-in rendering (internal dashed line)
-        if preset_key == "height" and shape in ("Triangular Prism", "Tri Prism"):
-            label_key = "Height (Tri)"
-            current_text, current_show = self.label_manager.get_entry_values(label_key)
-            if current_text.strip() and current_show:
-                self.label_manager.set_label_text(label_key, "", False)
-            else:
-                self.label_manager.set_label_text(label_key, text, True)
-            self._standalone_selected_dim = None
-            self._standalone_selected_label = None
-            self.generate_plot()
-            if not self.history_manager.is_restoring:
-                self._capture_current_state(force=True)
-            return
-        
-        # Rectangular Prism: all dim lines use centralized standalone system
-        
-        # Need a drawn shape to calculate endpoints — generate first if needed
-        endpoints = self._calc_dim_line_endpoints(preset_key)
-        if endpoints is None:
-            return
-        
-        # G11: determine which endpoint touches the shape (for right-angle marker)
-        # Exclude prisms — their "height" is an external side edge, not an internal altitude
-        _perp_presets = {
-            "height",
-            "para_height", "trap_height",
-        }
-        _is_prism = self.shape_var.get() in ("Rectangular Prism", "Triangular Prism", "Tri Prism")
-        right_angle_at = "p1" if (preset_key in _perp_presets and not _is_prism) else None
-
-        self._standalone_dim_lines.append({
-            "x1": endpoints["x1"], "y1": endpoints["y1"],
-            "x2": endpoints["x2"], "y2": endpoints["y2"],
-            "text": text,
-            "constraint": endpoints.get("constraint"),
-            "label_x": endpoints["label_x"],
-            "label_y": endpoints["label_y"],
-            "preset_key": preset_key,
-            "user_dragged": False,
-        })
-        self._standalone_selected_dim = len(self._standalone_dim_lines) - 1
-        self._standalone_selected_label = None
-        self._builtin_selected = None
-        
-        self.generate_plot()
-        if not self.history_manager.is_restoring:
-            self._capture_current_state(force=True)
-
-    def _get_preset_value_key(self, preset_key: str) -> Optional[str]:
-        """Map a dim line preset key to the Custom mode entry key for value population."""
-        shape = self.shape_var.get()
-        tri_type = self.triangle_type_var.get() if hasattr(self, 'triangle_type_var') else "Custom"
-        mapping = {
-            "Rectangle": {"height": "Width", "width": "Length"},
-            "Parallelogram": {
-                "para_height": "Height", "para_base": "Length",
-                "para_side_l": "Side", "para_side_r": "Side",
-            },
-            "Trapezoid": {
-                "trap_height": "Height", "trap_base": "Bottom Base",
-                "trap_top": "Top Base", "trap_side_l": "Left Side", "trap_side_r": "Right Side",
-            },
-            "Cylinder": {"height": "Height", "radius": "Radius", "diameter": "Diameter"},
-            "Cone": {"height": "Height", "radius": "Radius", "diameter": "Diameter"},
-            "Rectangular Prism": {
-                "height": "Height", "width": "Length (Front)", "length": "Width (Side)",
-            },
-            "Triangular Prism": {
-                "height": "Height", "tri_base": "Base", "tri_length": "Length",
-            },
-            "Tri Prism": {
-                "height": "Height", "tri_base": "Base", "tri_length": "Length",
-            },
-        }
-        # Triangle Custom mode uses specific entry labels
-        if shape == "Triangle" and tri_type == "Custom":
-            tri_mapping = {
-                "height": "Height", "width": "Base Width",
-                "side_l": "Left Side", "side_r": "Right Side",
-            }
-            return tri_mapping.get(preset_key)
-        shape_map = mapping.get(shape, {})
-        return shape_map.get(preset_key)
-
-    def _remove_standalone_annotation(self) -> None:
-        """Remove the selected standalone label, dimension line, or circumference arc."""
-        if self._builtin_selected:
-            key = self._builtin_selected
-            self.label_manager.label_texts.pop(key, None)
-            self.label_manager.label_visibility.pop(key, None)
-            self.label_manager.custom_positions.pop(key, None)
-            self._builtin_selected = None
-            self.generate_plot()
-            if not self.history_manager.is_restoring:
-                self._capture_current_state()
-            return
-        
-        if self._standalone_selected_dim is not None:
-            if self._standalone_selected_dim < len(self._standalone_dim_lines):
-                self._standalone_dim_lines.pop(self._standalone_selected_dim)
-            self._standalone_selected_dim = None
-            self.generate_plot()
-            if not self.history_manager.is_restoring:
-                self._capture_current_state()
-            return
-        
-        if self._standalone_selected_label is not None:
-            if self._standalone_selected_label < len(self._standalone_labels):
-                self._standalone_labels.pop(self._standalone_selected_label)
-            self._standalone_selected_label = None
-            self.generate_plot()
-            if not self.history_manager.is_restoring:
-                self._capture_current_state()
-
-    def _confirm_standalone_label(self) -> None:
-        """Add or update a standalone label/dim depending on edit mode."""
-        if self._standalone_edit_mode is not None:
-            self._apply_standalone_edit()
-        else:
-            self._add_standalone_label()
-
-    def _enter_standalone_edit(self, edit_type: str, idx: int) -> None:
-        """Enter edit mode: populate entry with existing text, swap button to Update."""
-        if edit_type == "builtin":
-            bk = getattr(self, '_builtin_edit_key', None)
-            existing = self.label_manager.label_texts.get(bk, "") if bk else ""
-        elif edit_type == "circ":
-            existing = self.label_manager.label_texts.get("Circumference", "c")
-        elif edit_type == "label" and idx < len(self._standalone_labels):
-            existing = self._standalone_labels[idx]["text"]
-        elif edit_type == "dim" and idx < len(self._standalone_dim_lines):
-            existing = self._standalone_dim_lines[idx]["text"]
-        else:
-            return
-        
-        self._standalone_edit_mode = {"type": edit_type, "idx": idx}
-        
-        if hasattr(self, '_standalone_label_entry'):
-            self._standalone_label_entry.delete(0, tk.END)
-            self._standalone_label_entry.insert(0, existing)
-            self._standalone_label_entry.focus_set()
-            self._standalone_label_entry.select_range(0, tk.END)
-        
-        if hasattr(self, '_standalone_text_btn'):
-            self._standalone_text_btn.config(text="Update")
-        if hasattr(self, '_standalone_cancel_btn'):
-            self._standalone_cancel_btn.pack(side=tk.LEFT, padx=1)
-
-    def _apply_standalone_edit(self) -> None:
-        """Apply the edited text to the label or dim line."""
-        if self._standalone_edit_mode is None:
-            return
-        if not hasattr(self, '_standalone_label_entry'):
-            return
-        
-        new_text = self._standalone_label_entry.get().strip()
-        if not new_text:
-            self._cancel_standalone_edit()
-            return
-        
-        edit_type = self._standalone_edit_mode["type"]
-        idx = self._standalone_edit_mode["idx"]
-        
-        if edit_type == "builtin":
-            bk = getattr(self, '_builtin_edit_key', None)
-            if bk:
-                self.label_manager.set_label_text(bk, new_text, True)
-        elif edit_type == "circ":
-            self.label_manager.set_label_text("Circumference", new_text, True)
-        elif edit_type == "label" and idx < len(self._standalone_labels):
-            self._standalone_labels[idx]["text"] = new_text
-        elif edit_type == "dim" and idx < len(self._standalone_dim_lines):
-            self._standalone_dim_lines[idx]["text"] = new_text
-        
-        self._cancel_standalone_edit()
-        self.generate_plot()
-        if not self.history_manager.is_restoring:
-            self._capture_current_state()
-
-    def _cancel_standalone_edit(self) -> None:
-        """Exit edit mode, restore + Text button."""
-        self._standalone_edit_mode = None
-        if hasattr(self, '_standalone_label_entry'):
-            self._standalone_label_entry.delete(0, tk.END)
-        if hasattr(self, '_standalone_text_btn'):
-            self._standalone_text_btn.config(text="+ Text")
-        if hasattr(self, '_standalone_cancel_btn'):
-            self._standalone_cancel_btn.pack_forget()
-
     def _build_composite_ui(self, shape: str) -> None:
         """Build the transfer list UI for composite shapes."""
         # Determine which source shapes to offer
@@ -7685,853 +9118,6 @@ class GeometryApp:
         if not self.history_manager.is_restoring:
             self._capture_current_state()
 
-    def _connect_composite_drag(self) -> None:
-        """Connect mouse events for composite shape dragging."""
-        self._disconnect_composite_drag()
-        self._composite_event_ids = [
-            self.canvas.mpl_connect('button_press_event', self._on_composite_press),
-            self.canvas.mpl_connect('motion_notify_event', self._on_composite_motion),
-            self.canvas.mpl_connect('button_release_event', self._on_composite_release),
-        ]
-        # Note: Delete/BackSpace are handled by the global _on_delete_shortcut binding
-        # (set in _bind_shortcuts), which already dispatches to _on_composite_delete
-        # when _is_composite_shape() is True. No separate binding needed here.
-    
-    def _disconnect_composite_drag(self) -> None:
-        """Disconnect composite drag mouse events."""
-        for eid in self._composite_event_ids:
-            try:
-                self.canvas.mpl_disconnect(eid)
-            except Exception:
-                pass
-        self._composite_event_ids = []
-        self._composite_drag_state = None
-        self._composite_marquee = None
-    
-    def _on_composite_press(self, event) -> None:
-        """Handle mouse press in composite mode — start dragging if a shape is hit."""
-        if event.inaxes != self.ax or event.button != 1:
-            return
-        if not self._is_composite_shape():
-            return
-        if not hasattr(self, '_composite_bboxes') or not self._composite_bboxes:
-            return
-        
-        mx, my = event.xdata, event.ydata
-        if mx is None or my is None:
-            return
-        
-        # Double-click on a dim label or text label → enter edit mode
-        # Check dim labels first (same priority as single-click hit testing)
-        if getattr(event, 'dblclick', False):
-            if hasattr(self, '_composite_dim_label_bboxes'):
-                for idx in reversed(range(len(self._composite_dim_label_bboxes))):
-                    bbox = self._composite_dim_label_bboxes[idx]
-                    if bbox[0] <= mx <= bbox[2] and bbox[1] <= my <= bbox[3]:
-                        self._enter_composite_edit("dim", idx)
-                        return
-            if hasattr(self, '_composite_label_bboxes'):
-                for idx in reversed(range(len(self._composite_label_bboxes))):
-                    bbox = self._composite_label_bboxes[idx]
-                    if bbox[0] <= mx <= bbox[2] and bbox[1] <= my <= bbox[3]:
-                        self._enter_composite_edit("label", idx)
-                        return
-        
-        # Handle dimension line placement mode
-        if self._composite_dim_mode is not None:
-            if self._handle_dim_line_click(mx, my):
-                return
-        
-        # Check for dimension line endpoint hit (for dragging endpoints)
-        if hasattr(self, '_composite_dim_endpoints'):
-            for idx, endpoints in enumerate(self._composite_dim_endpoints):
-                for ep_key in ("p1", "p2"):
-                    if ep_key not in endpoints:
-                        continue
-                    ex, ey = endpoints[ep_key]
-                    if abs(mx - ex) < 0.5 and abs(my - ey) < 0.5:
-                        self._composite_label_drag = {
-                            "type": "dim_endpoint",
-                            "idx": idx,
-                            "endpoint": ep_key,  # "p1", "p2", or "label"
-                            "start_x": mx,
-                            "start_y": my,
-                            "orig_x": ex,
-                            "orig_y": ey,
-                            "dragged": False
-                        }
-                        # Select this dimension line
-                        self._composite_selected_dim = idx
-                        self._composite_selected_label = None
-                        self._composite_selected.clear()
-                        if not self.history_manager.is_restoring:
-                            self._capture_current_state()
-                        self.root.config(cursor="fleur")
-                        return
-
-        # Check for dim line label hit first
-        if hasattr(self, '_composite_dim_label_bboxes'):
-            for idx in reversed(range(len(self._composite_dim_label_bboxes))):
-                bbox = self._composite_dim_label_bboxes[idx]
-                if bbox[0] <= mx <= bbox[2] and bbox[1] <= my <= bbox[3]:
-                    # Set up drag state for the dimension line label
-                    dim = self._composite_dim_lines[idx]
-                    # Use stored label position, or default to midpoint if not set
-                    label_x = dim.get("label_x", (dim["x1"] + dim["x2"]) / 2)
-                    label_y = dim.get("label_y", (dim["y1"] + dim["y2"]) / 2)
-                    
-                    self._composite_label_drag = {
-                        "type": "dim_label",
-                        "idx": idx,
-                        "start_x": mx,
-                        "start_y": my,
-                        "orig_x": label_x,
-                        "orig_y": label_y,
-                        "dragged": False
-                    }
-                    
-                    # Select this dimension line
-                    self._composite_selected_dim = idx
-                    self._composite_selected_label = None
-                    self._composite_selected.clear()
-                    
-                    if not self.history_manager.is_restoring:
-                        self._capture_current_state()
-                    self.root.config(cursor="fleur")
-                    return
-
-        # Check for dim line BODY hit (draggable line itself)
-        if hasattr(self, '_composite_dim_lines'):
-            for idx in reversed(range(len(self._composite_dim_lines))):
-                dim = self._composite_dim_lines[idx]
-                x1, y1 = dim["x1"], dim["y1"]
-                x2, y2 = dim["x2"], dim["y2"]
-
-                dx = x2 - x1
-                dy = y2 - y1
-                seg_len_sq = dx*dx + dy*dy
-                if seg_len_sq == 0:
-                    continue
-
-                # Projection factor
-                t = max(0.0, min(1.0, ((mx - x1)*dx + (my - y1)*dy) / seg_len_sq))
-                proj_x = x1 + t*dx
-                proj_y = y1 + t*dy
-
-                dist = math.sqrt((mx - proj_x)**2 + (my - proj_y)**2)
-
-                hit_radius = max((self.ax.get_xlim()[1] - self.ax.get_xlim()[0]) * 0.015, 0.2)
-
-                if dist < hit_radius and 0.05 < t < 0.95:
-                    # Start dragging the whole dim line
-                    self._composite_label_drag = {
-                        "type": "dim_body",
-                        "idx": idx,
-                        "start_x": mx,
-                        "start_y": my,
-                        "orig_x1": x1,
-                        "orig_y1": y1,
-                        "orig_x2": x2,
-                        "orig_y2": y2,
-                        "orig_lx": dim.get("label_x", (x1 + x2) / 2),
-                        "orig_ly": dim.get("label_y", (y1 + y2) / 2),
-                        "dragged": False
-                    }
-
-                    self._composite_selected_dim = idx
-                    self._composite_selected_label = None
-                    self._composite_selected.clear()
-
-                    if not self.history_manager.is_restoring:
-                        self._capture_current_state()
-                    self.root.config(cursor="fleur")
-                    return
-
-        
-        # Check for label hit first (labels are on top)
-        if hasattr(self, '_composite_label_bboxes'):
-            for idx in reversed(range(len(self._composite_label_bboxes))):
-                bbox = self._composite_label_bboxes[idx]
-                if bbox[0] <= mx <= bbox[2] and bbox[1] <= my <= bbox[3]:
-                    self._composite_label_drag = {
-                        "idx": idx,
-                        "start_x": mx,
-                        "start_y": my,
-                        "orig_x": self._composite_labels[idx]["x"],
-                        "orig_y": self._composite_labels[idx]["y"],
-                        "dragged": False
-                    }
-                    if not self.history_manager.is_restoring:
-                        self._capture_current_state()
-                    self.root.config(cursor="fleur")
-                    return
-        
-        # Check for modifier key (Ctrl or Cmd)
-        multi = bool(event.key and ("control" in event.key or "super" in event.key
-                                     or "ctrl" in str(event.key).lower()))
-        
-        # Hit test: find which shape's bounding box contains the click
-        for idx in reversed(range(len(self._composite_bboxes))):
-            bbox = self._composite_bboxes[idx]
-            if bbox[0] <= mx <= bbox[2] and bbox[1] <= my <= bbox[3]:
-
-                # Record whether this shape was already selected BEFORE press so
-                # the release handler can correctly decide whether a no-drag click
-                # should select (first click) or deselect (second click on same shape).
-                was_selected_before = idx in self._composite_selected
-
-                # --- Selection correctness ---
-                # If clicking inside an existing group selection, preserve the group
-                # Otherwise, update selection normally
-                if multi:
-                    # Ctrl/Cmd click toggles membership
-                    if idx in self._composite_selected:
-                        self._composite_selected.discard(idx)
-                    else:
-                        self._composite_selected.add(idx)
-                else:
-                    # Plain click:
-                    # If already part of a group, keep the group
-                    if idx not in self._composite_selected:
-                        self._composite_selected = {idx}
-
-                # Clear label/dim selection when selecting shapes
-                self._composite_selected_label = None
-                self._composite_selected_dim = None
-                self._update_composite_selection_ui()
-
-                # Store original positions for ALL selected shapes (for group drag)
-                orig_positions = {}
-                for sel_idx in self._composite_selected:
-                    orig_positions[sel_idx] = self._composite_positions.get(sel_idx, (0.0, 0.0))
-
-                # For group drag: capture group bbox and original annotation positions
-                # so labels/dim lines inside the group move as a unit with the shapes.
-                orig_labels = []
-                orig_dims = []
-                if len(self._composite_selected) > 1:
-                    all_sel = self._all_shapes_selected()
-                    grp_bb = self._get_group_bbox()
-                    if grp_bb != (0, 0, 0, 0):
-                        lbl_idxs, dim_idxs = self._get_annotations_in_region(*grp_bb, include_all=all_sel)
-                        orig_labels = [(i, self._composite_labels[i]["x"],
-                                        self._composite_labels[i]["y"]) for i in lbl_idxs]
-                        orig_dims = [(i,
-                                      self._composite_dim_lines[i]["x1"], self._composite_dim_lines[i]["y1"],
-                                      self._composite_dim_lines[i]["x2"], self._composite_dim_lines[i]["y2"],
-                                      self._composite_dim_lines[i].get("label_x"),
-                                      self._composite_dim_lines[i].get("label_y"))
-                                     for i in dim_idxs]
-                # For single-shape drag: capture annotations within this shape's bbox
-                elif idx < len(self._composite_bboxes):
-                    s_bbox = self._composite_bboxes[idx]
-                    if s_bbox != (0, 0, 0, 0):
-                        lbl_idxs, dim_idxs = self._get_annotations_in_region(*s_bbox)
-                        orig_labels = [(i, self._composite_labels[i]["x"],
-                                        self._composite_labels[i]["y"]) for i in lbl_idxs]
-                        orig_dims = [(i,
-                                      self._composite_dim_lines[i]["x1"], self._composite_dim_lines[i]["y1"],
-                                      self._composite_dim_lines[i]["x2"], self._composite_dim_lines[i]["y2"],
-                                      self._composite_dim_lines[i].get("label_x"),
-                                      self._composite_dim_lines[i].get("label_y"))
-                                     for i in dim_idxs]
-
-                self._composite_drag_state = {
-                    "idx": idx,
-                    "start_x": mx,
-                    "start_y": my,
-                    "orig_pos": self._composite_positions.get(idx, (0.0, 0.0)),
-                    "orig_positions": orig_positions,
-                    "dragged": False,
-                    "multi": multi,
-                    "was_selected_before": was_selected_before,
-                    "orig_labels": orig_labels,
-                    "orig_dims": orig_dims,
-                }
-
-                # Capture state before drag begins
-                if not self.history_manager.is_restoring:
-                    self._capture_current_state()
-
-                self.root.config(cursor="fleur")
-                return
-        
-        # Deselect any selected label or dim line
-        if self._composite_selected_label is not None or self._composite_selected_dim is not None:
-            self._composite_selected_label = None
-            self._composite_selected_dim = None
-            self._update_composite_selection_ui()
-            self.generate_plot()
-        
-        # Clicked empty space — start marquee selection
-        self._composite_marquee = {
-            "start_x": mx,
-            "start_y": my,
-            "rect_artist": None
-        }
-    
-    def _on_composite_motion(self, event) -> None:
-        """Handle mouse motion — update shape position during drag with snap, or draw marquee."""
-        # Handle label or dimension endpoint drag
-        if self._composite_label_drag is not None:
-            if event.inaxes != self.ax:
-                return
-            mx, my = event.xdata, event.ydata
-            if mx is None or my is None:
-                return
-            drag = self._composite_label_drag
-            drag["dragged"] = True
-            dx = mx - drag["start_x"]
-            dy = my - drag["start_y"]
-            idx = drag["idx"]
-            
-            if drag.get("type") == "dim_endpoint":
-                # Dragging a dimension line endpoint
-                if idx < len(self._composite_dim_lines):
-                    dim = self._composite_dim_lines[idx]
-                    ep = drag["endpoint"]
-                    new_x = drag["orig_x"] + dx
-                    new_y = drag["orig_y"] + dy
-                    
-                    # Apply constraints for preset lines
-                    if dim.get("constraint") == "height":
-                        # Vertical line: lock x coordinate
-                        new_x = drag["orig_x"]
-                    elif dim.get("constraint") == "width":
-                        # Horizontal line: lock y coordinate
-                        new_y = drag["orig_y"]
-                    
-                    if ep == "p1":
-                        dim["x1"], dim["y1"] = new_x, new_y
-                    elif ep == "p2":
-                        dim["x2"], dim["y2"] = new_x, new_y
-                    
-                    # Force update of hitboxes/endpoints for the drag session
-                    self.generate_plot()
-                    self._composite_label_drag["dragged"] = True
-            elif drag.get("type") == "dim_label":
-                # Dragging the dimension line label (moves label only, not the line)
-                if idx < len(self._composite_dim_lines):
-                    dim = self._composite_dim_lines[idx]
-                    # Update label position independently
-                    dim["label_x"] = drag["orig_x"] + dx
-                    dim["label_y"] = drag["orig_y"] + dy
-                    self.generate_plot()
-
-            elif drag.get("type") == "dim_body":
-                # Dragging the ENTIRE dimension line (moves both endpoints together)
-                if idx < len(self._composite_dim_lines):
-                    dim = self._composite_dim_lines[idx]
-
-                    # Move both endpoints by the same delta
-                    dim["x1"] = drag["orig_x1"] + dx
-                    dim["y1"] = drag["orig_y1"] + dy
-                    dim["x2"] = drag["orig_x2"] + dx
-                    dim["y2"] = drag["orig_y2"] + dy
-
-                    # Also move the label if it was manually positioned
-                    if "label_x" in dim and "label_y" in dim:
-                        dim["label_x"] = drag["orig_lx"] + dx
-                        dim["label_y"] = drag["orig_ly"] + dy
-
-                    self.generate_plot()
-
-            else:
-                # Dragging a text label
-                if idx < len(self._composite_labels):
-                    self._composite_labels[idx]["x"] = drag["orig_x"] + dx
-                    self._composite_labels[idx]["y"] = drag["orig_y"] + dy
-                    self.generate_plot()
-            return
-        
-        # Handle dimension line preview
-        if self._composite_dim_mode is not None and self._composite_dim_first_point is not None:
-            if event.inaxes == self.ax and event.xdata is not None:
-                mx, my = event.xdata, event.ydata
-                x1, y1 = self._composite_dim_first_point
-                x2, y2 = mx, my
-                
-                if self._composite_dim_mode == "height":
-                    x2 = x1
-                elif self._composite_dim_mode == "width":
-                    y2 = y1
-                
-                # Remove old preview
-                if hasattr(self, '_dim_preview_line') and self._dim_preview_line:
-                    try:
-                        self._dim_preview_line.remove()
-                    except (ValueError, AttributeError):
-                        pass
-                
-                self._dim_preview_line = self.ax.plot(
-                    [x1, x2], [y1, y2],
-                    color="#4488ff", linestyle="--", linewidth=1.0, alpha=0.6, zorder=20
-                )[0]
-                self.canvas.draw_idle()
-            return
-        
-        # Handle marquee selection drawing
-        if self._composite_marquee is not None:
-            if event.inaxes != self.ax:
-                return
-            mx, my = event.xdata, event.ydata
-            if mx is None or my is None:
-                return
-            
-            m = self._composite_marquee
-            x0, y0 = m["start_x"], m["start_y"]
-            
-            # Remove old rectangle if any
-            if m["rect_artist"] is not None:
-                try:
-                    m["rect_artist"].remove()
-                except (ValueError, AttributeError):
-                    pass
-            
-            # Draw selection rectangle
-            rx = min(x0, mx)
-            ry = min(y0, my)
-            rw = abs(mx - x0)
-            rh = abs(my - y0)
-            m["rect_artist"] = self.ax.add_patch(patches.Rectangle(
-                (rx, ry), rw, rh,
-                edgecolor="#4488ff", facecolor="#4488ff",
-                alpha=0.12, linewidth=1.2, linestyle="-", zorder=25
-            ))
-            self.canvas.draw_idle()
-            return
-        
-        if self._composite_drag_state is None:
-            # Hover cursor: fleur over any draggable target, arrow otherwise
-            if event.inaxes == self.ax and event.xdata is not None and event.ydata is not None:
-                mx, my = event.xdata, event.ydata
-                hit = False
-                hit_radius = max((self.ax.get_xlim()[1] - self.ax.get_xlim()[0]) * 0.015, 0.2)
-                if hasattr(self, '_composite_label_bboxes'):
-                    for bbox in self._composite_label_bboxes:
-                        if bbox[0] <= mx <= bbox[2] and bbox[1] <= my <= bbox[3]:
-                            hit = True
-                            break
-                if not hit and hasattr(self, '_composite_dim_label_bboxes'):
-                    for bbox in self._composite_dim_label_bboxes:
-                        if bbox[0] <= mx <= bbox[2] and bbox[1] <= my <= bbox[3]:
-                            hit = True
-                            break
-                if not hit and hasattr(self, '_composite_dim_endpoints'):
-                    for ep in self._composite_dim_endpoints:
-                        p1, p2 = ep["p1"], ep["p2"]
-                        for pt in (p1, p2):
-                            if math.sqrt((mx - pt[0])**2 + (my - pt[1])**2) < hit_radius:
-                                hit = True
-                                break
-                        if not hit:
-                            dx, dy = p2[0] - p1[0], p2[1] - p1[1]
-                            seg_len_sq = dx*dx + dy*dy
-                            if seg_len_sq > 0:
-                                t = max(0.0, min(1.0, ((mx - p1[0])*dx + (my - p1[1])*dy) / seg_len_sq))
-                                dist = math.sqrt((mx - p1[0] - t*dx)**2 + (my - p1[1] - t*dy)**2)
-                                if dist < hit_radius:
-                                    hit = True
-                        if hit:
-                            break
-                if not hit and hasattr(self, '_composite_bboxes'):
-                    for bbox in self._composite_bboxes:
-                        if bbox != (0, 0, 0, 0) and bbox[0] <= mx <= bbox[2] and bbox[1] <= my <= bbox[3]:
-                            hit = True
-                            break
-                desired = "fleur" if hit else "arrow"
-                if self.root.cget("cursor") != desired:
-                    self.root.config(cursor=desired)
-            else:
-                if self.root.cget("cursor") not in ("crosshair", "fleur"):
-                    self.root.config(cursor="arrow")
-            return
-        if event.inaxes != self.ax:
-            return
-        mx, my = event.xdata, event.ydata
-        if mx is None or my is None:
-            return
-        
-        drag = self._composite_drag_state
-        idx = drag["idx"]
-        dx = mx - drag["start_x"]
-        dy = my - drag["start_y"]
-        
-        new_x = drag["orig_pos"][0] + dx
-        new_y = drag["orig_pos"][1] + dy
-        
-        # Cache the shape's half-dimensions on first motion event.
-        # With absolute position storage, the shape's current canvas center is
-        # simply (bbox_cx, bbox_cy) and matches orig_pos directly.
-        if "half_w" not in drag and hasattr(self, '_composite_bboxes') and idx < len(self._composite_bboxes):
-            bbox = self._composite_bboxes[idx]
-            if bbox != (0, 0, 0, 0):
-                drag["half_w"] = (bbox[2] - bbox[0]) / 2
-                drag["half_h"] = (bbox[3] - bbox[1]) / 2
-        
-        # Calculate snap against non-selected shapes
-        snap_dx = 0.0
-        snap_dy = 0.0
-        self._composite_snap_guides = []
-        is_group = idx in self._composite_selected and len(self._composite_selected) > 1
-        
-        if "half_w" in drag:
-            # new_x/new_y are the provisional absolute canvas center for the dragged shape
-            prov_cx = new_x
-            prov_cy = new_y
-            hw, hh = drag["half_w"], drag["half_h"]
-            prov_bbox = (prov_cx - hw, prov_cy - hh, prov_cx + hw, prov_cy + hh)
-            
-            # Exclude dragged shape AND all other selected shapes from snap targets
-            excluded = self._composite_selected if is_group else {idx}
-            other_bboxes = []
-            for i, bbox in enumerate(self._composite_bboxes):
-                if i in excluded:
-                    other_bboxes.append((0, 0, 0, 0))
-                else:
-                    other_bboxes.append(bbox)
-            
-            # Shift dragged shape's snap anchors to provisional position
-            if hasattr(self, '_composite_snap_anchors') and idx < len(self._composite_snap_anchors):
-                cur_pos = self._composite_positions.get(idx, (0.0, 0.0))
-                anchor_shift_x = new_x - cur_pos[0]
-                anchor_shift_y = new_y - cur_pos[1]
-                orig_anchors = self._composite_snap_anchors[idx]
-                self._composite_snap_anchors[idx] = [(ax + anchor_shift_x, ay + anchor_shift_y) for ax, ay in orig_anchors]
-            
-            snap_dx, snap_dy, guides = self._calc_snap(idx, prov_bbox, other_bboxes)
-            
-            # Restore original anchors (will be properly set on next generate_plot)
-            if hasattr(self, '_composite_snap_anchors') and idx < len(self._composite_snap_anchors):
-                self._composite_snap_anchors[idx] = orig_anchors
-            new_x += snap_dx
-            new_y += snap_dy
-            self._composite_snap_guides = guides
-        
-        drag["dragged"] = True
-        
-        # Compute the actual translation delta applied (after snap)
-        actual_dx = new_x - drag["orig_pos"][0]
-        actual_dy = new_y - drag["orig_pos"][1]
-        
-        # Group drag: move all selected shapes by the same delta
-        if is_group:
-            raw_dx = actual_dx
-            raw_dy = actual_dy
-            for sel_idx in self._composite_selected:
-                orig = drag["orig_positions"].get(sel_idx, (0.0, 0.0))
-                self._composite_positions[sel_idx] = (orig[0] + raw_dx, orig[1] + raw_dy)
-        else:
-            self._composite_positions[idx] = (new_x, new_y)
-        
-        # Move annotations that were captured at drag-start alongside the shapes
-        for lbl_i, ox, oy in drag.get("orig_labels", []):
-            if lbl_i < len(self._composite_labels):
-                self._composite_labels[lbl_i]["x"] = ox + actual_dx
-                self._composite_labels[lbl_i]["y"] = oy + actual_dy
-        for dim_entry in drag.get("orig_dims", []):
-            dim_i, ox1, oy1, ox2, oy2, olx, oly = dim_entry
-            if dim_i < len(self._composite_dim_lines):
-                d = self._composite_dim_lines[dim_i]
-                d["x1"] = ox1 + actual_dx
-                d["y1"] = oy1 + actual_dy
-                d["x2"] = ox2 + actual_dx
-                d["y2"] = oy2 + actual_dy
-                if olx is not None:
-                    d["label_x"] = olx + actual_dx
-                if oly is not None:
-                    d["label_y"] = oly + actual_dy
-        
-        self.generate_plot()
-        
-        # Draw snap guide lines on top
-        if self._composite_snap_guides:
-            for guide in self._composite_snap_guides:
-                x1, y1, x2, y2, _ = guide
-                self.ax.plot([x1, x2], [y1, y2],
-                           color=AppConstants.SNAP_LINE_COLOR,
-                           linestyle=AppConstants.SNAP_LINE_STYLE,
-                           linewidth=AppConstants.SNAP_LINE_WIDTH,
-                           alpha=AppConstants.SNAP_LINE_ALPHA,
-                           zorder=20)
-            self.canvas.draw_idle()
-    
-    def _on_composite_release(self, event) -> None:
-        """Handle mouse release — finalize marquee, drag, or select/multi-select shape."""
-        # Handle label drag/click release (including dimension line endpoints and labels)
-        if self._composite_label_drag is not None:
-            drag = self._composite_label_drag
-            was_drag = drag.get("dragged", False)
-            idx = drag.get("idx")
-            drag_type = drag.get("type")
-            is_dim_endpoint = drag_type == "dim_endpoint"
-            is_dim_label = drag_type == "dim_label"
-            is_dim_body = drag_type == "dim_body"
-            self._composite_label_drag = None
-            self.root.config(cursor="arrow")
-            
-            if was_drag:
-                self.generate_plot()
-                if not self.history_manager.is_restoring:
-                    self._capture_current_state()
-            else:
-                # Click without drag
-                if is_dim_endpoint or is_dim_label or is_dim_body:
-                    # Already selected the dimension line in press handler
-                    self._update_composite_selection_ui()
-                    self.generate_plot()
-                else:
-                    # Click without drag — select/deselect this label
-                    if self._composite_selected_label == idx:
-                        self._composite_selected_label = None
-                    else:
-                        self._composite_selected_label = idx
-                    # Deselect shapes when selecting a label
-                    self._composite_selected.clear()
-                    self._update_composite_selection_ui()
-                    self.generate_plot()
-            return
-        
-        # Handle marquee selection finalization
-        if self._composite_marquee is not None:
-            m = self._composite_marquee
-            self._composite_marquee = None
-            
-            # Remove the rectangle artist
-            if m["rect_artist"] is not None:
-                try:
-                    m["rect_artist"].remove()
-                except (ValueError, AttributeError):
-                    pass
-            
-            # Get final mouse position
-            mx, my = None, None
-            if event.inaxes == self.ax and event.xdata is not None:
-                mx, my = event.xdata, event.ydata
-            
-            if mx is not None:
-                x0, y0 = m["start_x"], m["start_y"]
-                # Marquee rectangle bounds
-                sel_x_min = min(x0, mx)
-                sel_x_max = max(x0, mx)
-                sel_y_min = min(y0, my)
-                sel_y_max = max(y0, my)
-                
-                # Only treat as marquee if dragged a meaningful distance
-                if abs(mx - x0) > 0.3 or abs(my - y0) > 0.3:
-                    # Check for modifier key for additive selection
-                    additive = False
-                    if hasattr(event, 'guiEvent') and event.guiEvent is not None:
-                        state = event.guiEvent.state
-                        additive = bool(state & 0x4) or bool(state & 0x10)
-                    
-                    if not additive:
-                        self._composite_selected.clear()
-                    
-                    # Select all shapes whose bbox intersects the marquee
-                    if hasattr(self, '_composite_bboxes'):
-                        for idx, bbox in enumerate(self._composite_bboxes):
-                            if bbox == (0, 0, 0, 0):
-                                continue
-                            # Check intersection: two rects intersect if they overlap on both axes
-                            if (bbox[0] <= sel_x_max and bbox[2] >= sel_x_min and
-                                    bbox[1] <= sel_y_max and bbox[3] >= sel_y_min):
-                                self._composite_selected.add(idx)
-                    
-                    self._update_composite_selection_ui()
-                    self.generate_plot()
-                else:
-                    # Tiny drag = click on empty space — deselect
-                    if self._composite_selected:
-                        self._composite_selected.clear()
-                        self._update_composite_selection_ui()
-                        self.generate_plot()
-            else:
-                # Released outside axes
-                if self._composite_selected:
-                    self._composite_selected.clear()
-                    self._update_composite_selection_ui()
-                    self.generate_plot()
-            
-            self.canvas.draw_idle()
-            return
-        
-        if self._composite_drag_state is None:
-            return
-        
-        drag = self._composite_drag_state
-        was_drag = drag.get("dragged", False)
-        multi = drag.get("multi", False)
-        idx = drag["idx"]
-        
-        self._composite_drag_state = None
-        self._composite_snap_guides = []
-        self.root.config(cursor="arrow")
-        
-        if was_drag:
-            # Finalize drag
-            self.generate_plot()
-            if not self.history_manager.is_restoring:
-                self._capture_current_state()
-        else:
-            # Click without drag — use the pre-press selection state to decide.
-            # Press already updated _composite_selected; here we apply toggle logic
-            # based on whether the shape was selected BEFORE the press.
-            was_selected_before = drag.get("was_selected_before", False)
-            if multi:
-                # Ctrl+Click: already toggled in press handler — nothing more to do.
-                # The press set the correct final state for Ctrl+Click.
-                pass
-            else:
-                # Plain click:
-                # If shape was NOT selected before → keep it selected (press already did this).
-                # If shape WAS already the sole selection → deselect (toggle off).
-                # If shape was part of a group → collapse to solo selection of this shape.
-                if was_selected_before and self._composite_selected == {idx}:
-                    # Was already the sole selection: second click deselects
-                    self._composite_selected.clear()
-                else:
-                    # Newly selected or collapsing a group to this shape
-                    self._composite_selected = {idx}
-            self._update_composite_selection_ui()
-            self.generate_plot()
-
-    def _translate_patch(self, patch, dx: float, dy: float) -> None:
-        """Translate a matplotlib patch by (dx, dy) in data coordinates."""
-        if isinstance(patch, (patches.Polygon, patches.FancyArrow)):
-            # Polygon, Rectangle, FancyArrow all support get_xy/set_xy
-            xy = patch.get_xy()
-            patch.set_xy(xy + np.array([dx, dy]))
-        elif isinstance(patch, (patches.Circle, patches.Ellipse, patches.Arc, patches.Wedge)):
-            # All have a center property
-            cx, cy = patch.center
-            patch.set_center((cx + dx, cy + dy))
-        elif isinstance(patch, patches.Rectangle):
-            x, y = patch.get_xy()
-            patch.set_xy((x + dx, y + dy))
-        else:
-            # Fallback: try get_xy first, then center
-            if hasattr(patch, 'get_xy'):
-                xy = patch.get_xy()
-                if hasattr(xy, '__add__'):
-                    patch.set_xy(xy + np.array([dx, dy]))
-                else:
-                    patch.set_xy((xy[0] + dx, xy[1] + dy))
-            elif hasattr(patch, 'center'):
-                cx, cy = patch.center
-                patch.set_center((cx + dx, cy + dy))
-
-    def _calc_snap(self, drag_idx: int, drag_bbox: tuple,
-                   all_bboxes: list[tuple]) -> tuple[float, float, list]:
-        """Calculate snap offsets and guide lines for a dragged shape.
-        
-        Compares the dragged shape's edges, centers, and semantic anchor
-        points against all other shapes.  Anchor-to-anchor snaps use a
-        tighter threshold and win ties with bbox snaps so that 3D
-        ellipse centres align cleanly.
-        Returns (snap_dx, snap_dy, guide_lines) where guide_lines are
-        [(x1,y1,x2,y2,axis), ...] for visual feedback.
-        """
-        threshold = AppConstants.SNAP_THRESHOLD
-        # Anchor snaps use a slightly tighter threshold but get a priority
-        # bonus: when an anchor snap and a bbox snap are within 0.3 of each
-        # other, the anchor snap wins.
-        anchor_threshold = threshold * 0.9
-        snap_dx = 0.0
-        snap_dy = 0.0
-        guides = []
-        
-        d_left, d_bottom, d_right, d_top = drag_bbox
-        d_cx = (d_left + d_right) / 2
-        d_cy = (d_bottom + d_top) / 2
-        
-        best_x_dist = threshold
-        best_y_dist = threshold
-        best_x_is_anchor = False
-        best_y_is_anchor = False
-        
-        # Collect semantic anchors if available
-        has_anchors = hasattr(self, '_composite_snap_anchors') and self._composite_snap_anchors
-        drag_anchors = []
-        if has_anchors and drag_idx < len(self._composite_snap_anchors):
-            # Shift anchors by the same provisional position used for drag_bbox
-            drag_anchors = self._composite_snap_anchors[drag_idx]
-        
-        for i, bbox in enumerate(all_bboxes):
-            if i == drag_idx or bbox == (0, 0, 0, 0):
-                continue
-            
-            o_left, o_bottom, o_right, o_top = bbox
-            o_cx = (o_left + o_right) / 2
-            o_cy = (o_bottom + o_top) / 2
-            
-            # --- Bbox edge snaps ---
-            x_snaps = [
-                (d_left, o_left), (d_left, o_right),
-                (d_right, o_left), (d_right, o_right),
-                (d_cx, o_cx),
-                (d_left, o_cx), (d_right, o_cx),
-                (d_cx, o_left), (d_cx, o_right),
-            ]
-            
-            for d_edge, o_edge in x_snaps:
-                dist = abs(d_edge - o_edge)
-                # Anchor snap wins ties: only replace anchor with bbox if bbox is strictly closer by margin
-                if dist < best_x_dist and not (best_x_is_anchor and dist > best_x_dist - 0.3):
-                    best_x_dist = dist
-                    best_x_is_anchor = False
-                    snap_dx = o_edge - d_edge
-                    all_y = [d_bottom, d_top, o_bottom, o_top]
-                    guides = [g for g in guides if g[4] != "x"]
-                    guides.append((o_edge, min(all_y) - 0.5, o_edge, max(all_y) + 0.5, "x"))
-            
-            y_snaps = [
-                (d_bottom, o_bottom), (d_bottom, o_top),
-                (d_top, o_bottom), (d_top, o_top),
-                (d_cy, o_cy),
-                (d_bottom, o_cy), (d_top, o_cy),
-                (d_cy, o_bottom), (d_cy, o_top),
-            ]
-            
-            for d_edge, o_edge in y_snaps:
-                dist = abs(d_edge - o_edge)
-                if dist < best_y_dist and not (best_y_is_anchor and dist > best_y_dist - 0.3):
-                    best_y_dist = dist
-                    best_y_is_anchor = False
-                    snap_dy = o_edge - d_edge
-                    all_x = [d_left, d_right, o_left, o_right]
-                    guides = [g for g in guides if g[4] != "y"]
-                    guides.append((min(all_x) - 0.5, o_edge, max(all_x) + 0.5, o_edge, "y"))
-            
-            # --- Semantic anchor snaps (higher priority) ---
-            if has_anchors and i < len(self._composite_snap_anchors):
-                other_anchors = self._composite_snap_anchors[i]
-                if drag_anchors and other_anchors:
-                    for dax, day in drag_anchors:
-                        for oax, oay in other_anchors:
-                            # X anchor snap
-                            dist_x = abs(dax - oax)
-                            if dist_x < anchor_threshold:
-                                if dist_x < best_x_dist or (best_x_is_anchor and dist_x <= best_x_dist):
-                                    best_x_dist = dist_x
-                                    best_x_is_anchor = True
-                                    snap_dx = oax - dax
-                                    all_y = [d_bottom, d_top, o_bottom, o_top]
-                                    guides = [g for g in guides if g[4] != "x"]
-                                    guides.append((oax, min(all_y) - 0.5, oax, max(all_y) + 0.5, "x"))
-                            # Y anchor snap
-                            dist_y = abs(day - oay)
-                            if dist_y < anchor_threshold:
-                                if dist_y < best_y_dist or (best_y_is_anchor and dist_y <= best_y_dist):
-                                    best_y_dist = dist_y
-                                    best_y_is_anchor = True
-                                    snap_dy = oay - day
-                                    all_x = [d_left, d_right, o_left, o_right]
-                                    guides = [g for g in guides if g[4] != "y"]
-                                    guides.append((min(all_x) - 0.5, oay, max(all_x) + 0.5, oay, "y"))
-        
-        return snap_dx, snap_dy, guides
-
     def _on_composite_delete(self, event=None) -> None:
         """Delete selected composite shapes or label."""
         if not self._is_composite_shape():
@@ -8596,574 +9182,6 @@ class GeometryApp:
             self._builtin_selected is not None):
             self._remove_standalone_annotation()
     
-    def _add_composite_label(self) -> None:
-        """Add a custom label to the composite canvas."""
-        if not hasattr(self, '_composite_label_entry'):
-            return
-        text = self._composite_label_entry.get().strip()
-        if not text:
-            return
-        
-        # Place label at the center of the current view
-        xlim = self.ax.get_xlim()
-        ylim = self.ax.get_ylim()
-        cx = (xlim[0] + xlim[1]) / 2
-        cy = (ylim[0] + ylim[1]) / 2
-        
-        self._composite_labels.append({"text": text, "x": cx, "y": cy})
-        self._composite_label_entry.delete(0, tk.END)
-        self._composite_selected_label = len(self._composite_labels) - 1
-        
-        self.generate_plot()
-        if not self.history_manager.is_restoring:
-            self._capture_current_state()
-    
-    def _remove_composite_label(self) -> None:
-        """Remove the selected composite label."""
-        if self._composite_selected_label is None:
-            return
-        if self._composite_selected_label >= len(self._composite_labels):
-            return
-        
-        self._composite_labels.pop(self._composite_selected_label)
-        self._composite_selected_label = None
-        
-        self.generate_plot()
-        if not self.history_manager.is_restoring:
-            self._capture_current_state()
-
-    def _confirm_composite_label(self) -> None:
-        """Add or update a composite label depending on edit mode."""
-        if self._composite_edit_mode is not None:
-            self._apply_composite_edit()
-        else:
-            self._add_composite_label()
-
-    def _enter_composite_edit(self, edit_type: str, idx: int) -> None:
-        """Enter edit mode for a composite label or dim line label."""
-        if edit_type == "label" and idx < len(self._composite_labels):
-            existing = self._composite_labels[idx]["text"]
-        elif edit_type == "dim" and idx < len(self._composite_dim_lines):
-            existing = self._composite_dim_lines[idx]["text"]
-        else:
-            return
-        
-        self._composite_edit_mode = {"type": edit_type, "idx": idx}
-        
-        if hasattr(self, '_composite_label_entry'):
-            self._composite_label_entry.delete(0, tk.END)
-            self._composite_label_entry.insert(0, existing)
-            self._composite_label_entry.focus_set()
-            self._composite_label_entry.select_range(0, tk.END)
-        
-        if hasattr(self, '_composite_text_btn'):
-            self._composite_text_btn.config(text="Update")
-        if hasattr(self, '_composite_cancel_btn'):
-            self._composite_cancel_btn.pack(side=tk.LEFT, padx=1)
-
-    def _apply_composite_edit(self) -> None:
-        """Apply edited text to composite label or dim line."""
-        if self._composite_edit_mode is None:
-            return
-        if not hasattr(self, '_composite_label_entry'):
-            return
-        
-        new_text = self._composite_label_entry.get().strip()
-        if not new_text:
-            self._cancel_composite_edit()
-            return
-        
-        edit_type = self._composite_edit_mode["type"]
-        idx = self._composite_edit_mode["idx"]
-        
-        if edit_type == "label" and idx < len(self._composite_labels):
-            self._composite_labels[idx]["text"] = new_text
-        elif edit_type == "dim" and idx < len(self._composite_dim_lines):
-            self._composite_dim_lines[idx]["text"] = new_text
-        
-        self._cancel_composite_edit()
-        self.generate_plot()
-        if not self.history_manager.is_restoring:
-            self._capture_current_state()
-
-    def _cancel_composite_edit(self) -> None:
-        """Exit composite edit mode, restore + Text button."""
-        self._composite_edit_mode = None
-        if hasattr(self, '_composite_label_entry'):
-            self._composite_label_entry.delete(0, tk.END)
-        if hasattr(self, '_composite_text_btn'):
-            self._composite_text_btn.config(text="+ Text")
-        if hasattr(self, '_composite_cancel_btn'):
-            self._composite_cancel_btn.pack_forget()
-
-    def _start_dim_line_mode(self, mode: str) -> None:
-        """Enter dimension line placement mode."""
-        text = self._composite_label_entry.get().strip()
-        if not text:
-            # Default labels for presets
-            defaults = {"height": "h", "width": "w", "radius": "r", "free": "d"}
-            text = defaults.get(mode, "d")
-        
-        self._composite_dim_mode = mode
-        self._composite_dim_first_point = None
-        self._dim_status_label.config(text=f"Click first point for {mode} dimension line...")
-        self.root.config(cursor="crosshair")
-    
-    def _cancel_dim_line_mode(self) -> None:
-        """Exit dimension line placement mode."""
-        self._composite_dim_mode = None
-        self._composite_dim_first_point = None
-        if hasattr(self, '_dim_status_label'):
-            self._dim_status_label.config(text="")
-        if hasattr(self, '_dim_preview_line') and self._dim_preview_line:
-            try:
-                self._dim_preview_line.remove()
-            except (ValueError, AttributeError):
-                pass
-            self._dim_preview_line = None
-        self.root.config(cursor="arrow")
-    
-    def _handle_dim_line_click(self, mx: float, my: float) -> bool:
-        """Handle a click during dimension line placement. Returns True if handled."""
-        if self._composite_dim_mode is None:
-            return False
-        
-        mode = self._composite_dim_mode
-        
-        if self._composite_dim_first_point is None:
-            # First click — record the starting point
-            self._composite_dim_first_point = (mx, my)
-            self._dim_status_label.config(text=f"Click second point for {mode} dimension line...")
-            return True
-        else:
-            # Second click — create the dimension line
-            x1, y1 = self._composite_dim_first_point
-            x2, y2 = mx, my
-            
-            # Apply constraints for presets
-            if mode == "height":
-                x2 = x1  # vertical line
-            elif mode == "width":
-                y2 = y1  # horizontal line
-            elif mode == "radius":
-                pass  # free direction from center
-            
-            text = self._composite_label_entry.get().strip()
-            if not text:
-                defaults = {"height": "h", "width": "w", "radius": "r", "free": "d"}
-                text = defaults.get(mode, "d")
-            
-            # Calculate initial label position at midpoint
-            mid_x = (x1 + x2) / 2
-            mid_y = (y1 + y2) / 2
-            
-            self._composite_dim_lines.append({
-                "x1": x1, "y1": y1, "x2": x2, "y2": y2,
-                "text": text,
-                "constraint": mode if mode != "free" else None,
-                "label_x": mid_x,
-                "label_y": mid_y
-            })
-            
-            self._composite_label_entry.delete(0, tk.END)
-            self._composite_selected_dim = len(self._composite_dim_lines) - 1
-            self._cancel_dim_line_mode()
-            
-            self.generate_plot()
-            if not self.history_manager.is_restoring:
-                self._capture_current_state()
-            return True
-    
-    def _remove_selected_annotation(self) -> None:
-        """Remove the selected label or dimension line."""
-        if self._composite_selected_label is not None:
-            self._remove_composite_label()
-        elif self._composite_selected_dim is not None:
-            if self._composite_selected_dim < len(self._composite_dim_lines):
-                self._composite_dim_lines.pop(self._composite_selected_dim)
-            self._composite_selected_dim = None
-            self.generate_plot()
-            if not self.history_manager.is_restoring:
-                self._capture_current_state()
-
-    def _update_composite_selection_ui(self) -> None:
-        """Update the UI to reflect which composite shapes are selected."""
-        if hasattr(self, 'composite_transfer') and self.composite_transfer is not None:
-            dest = self.composite_transfer.dest_listbox
-            dest.selection_clear(0, tk.END)
-            for idx in self._composite_selected:
-                if idx < dest.size():
-                    dest.selection_set(idx)
-            # Scroll to show the most recently selected
-            if self._composite_selected:
-                last = max(self._composite_selected)
-                if last < dest.size():
-                    dest.see(last)
-    
-    def _get_group_center(self) -> tuple[float, float]:
-        """Calculate the center of all selected shapes' bounding boxes."""
-        if not self._composite_selected or not hasattr(self, '_composite_bboxes'):
-            return (0.0, 0.0)
-        xs, ys = [], []
-        for idx in self._composite_selected:
-            if idx < len(self._composite_bboxes):
-                bbox = self._composite_bboxes[idx]
-                if bbox != (0, 0, 0, 0):
-                    xs.append((bbox[0] + bbox[2]) / 2)
-                    ys.append((bbox[1] + bbox[3]) / 2)
-        if not xs:
-            return (0.0, 0.0)
-        return (sum(xs) / len(xs), sum(ys) / len(ys))
-
-    def _get_annotations_in_region(self, x_min: float, y_min: float,
-                                    x_max: float, y_max: float,
-                                    include_all: bool = False) -> tuple[list[int], list[int]]:
-        """Return (label_indices, dim_line_indices) whose positions fall within the given region.
-        If include_all is True, return all annotations regardless of position."""
-        label_idxs = []
-        for i, lbl in enumerate(self._composite_labels):
-            if include_all or (x_min <= lbl["x"] <= x_max and y_min <= lbl["y"] <= y_max):
-                label_idxs.append(i)
-        
-        dim_idxs = []
-        for i, dim in enumerate(self._composite_dim_lines):
-            if include_all:
-                dim_idxs.append(i)
-            else:
-                # Include if both endpoints are within the region
-                p1_in = x_min <= dim["x1"] <= x_max and y_min <= dim["y1"] <= y_max
-                p2_in = x_min <= dim["x2"] <= x_max and y_min <= dim["y2"] <= y_max
-                if p1_in and p2_in:
-                    dim_idxs.append(i)
-        
-        return label_idxs, dim_idxs
-
-    def _all_shapes_selected(self) -> bool:
-        """Check if every shape in the composite is selected."""
-        if not hasattr(self, 'composite_transfer') or self.composite_transfer is None:
-            return False
-        total = self.composite_transfer.dest_listbox.size()
-        return total > 0 and len(self._composite_selected) >= total
-
-    def _get_group_bbox(self) -> tuple[float, float, float, float]:
-        """Get the bounding box encompassing all selected shapes with padding."""
-        if not self._composite_selected or not hasattr(self, '_composite_bboxes'):
-            return (0, 0, 0, 0)
-        x_mins, y_mins, x_maxs, y_maxs = [], [], [], []
-        for idx in self._composite_selected:
-            if idx < len(self._composite_bboxes):
-                bbox = self._composite_bboxes[idx]
-                if bbox != (0, 0, 0, 0):
-                    x_mins.append(bbox[0])
-                    y_mins.append(bbox[1])
-                    x_maxs.append(bbox[2])
-                    y_maxs.append(bbox[3])
-        if not x_mins:
-            return (0, 0, 0, 0)
-        pad = 0.5
-        return (min(x_mins) - pad, min(y_mins) - pad, max(x_maxs) + pad, max(y_maxs) + pad)
-
-    def _rotate_annotations(self, label_idxs: list[int], dim_idxs: list[int],
-                             cx: float, cy: float, direction: int) -> None:
-        """Rotate annotations around (cx, cy) by 90 degrees. direction: 1=CW, -1=CCW."""
-        def rot(x, y):
-            rx, ry = x - cx, y - cy
-            if direction == 1:
-                return cx + ry, cy - rx
-            else:
-                return cx - ry, cy + rx
-        
-        for i in label_idxs:
-            lbl = self._composite_labels[i]
-            lbl["x"], lbl["y"] = rot(lbl["x"], lbl["y"])
-        
-        for i in dim_idxs:
-            dim = self._composite_dim_lines[i]
-            dim["x1"], dim["y1"] = rot(dim["x1"], dim["y1"])
-            dim["x2"], dim["y2"] = rot(dim["x2"], dim["y2"])
-            if "label_x" in dim and "label_y" in dim:
-                dim["label_x"], dim["label_y"] = rot(dim["label_x"], dim["label_y"])
-            # Update constraint direction after rotation
-            c = dim.get("constraint")
-            if c == "height":
-                dim["constraint"] = "width"
-            elif c == "width":
-                dim["constraint"] = "height"
-
-    def _flip_annotations_h(self, label_idxs: list[int], dim_idxs: list[int],
-                              cx: float) -> None:
-        """Mirror annotations horizontally around x=cx."""
-        for i in label_idxs:
-            lbl = self._composite_labels[i]
-            lbl["x"] = 2 * cx - lbl["x"]
-        
-        for i in dim_idxs:
-            dim = self._composite_dim_lines[i]
-            dim["x1"] = 2 * cx - dim["x1"]
-            dim["x2"] = 2 * cx - dim["x2"]
-            if "label_x" in dim:
-                dim["label_x"] = 2 * cx - dim["label_x"]
-
-    def _flip_annotations_v(self, label_idxs: list[int], dim_idxs: list[int],
-                              cy: float) -> None:
-        """Mirror annotations vertically around y=cy."""
-        for i in label_idxs:
-            lbl = self._composite_labels[i]
-            lbl["y"] = 2 * cy - lbl["y"]
-        
-        for i in dim_idxs:
-            dim = self._composite_dim_lines[i]
-            dim["y1"] = 2 * cy - dim["y1"]
-            dim["y2"] = 2 * cy - dim["y2"]
-            if "label_y" in dim:
-                dim["label_y"] = 2 * cy - dim["label_y"]
-
-    def _composite_flip(self, axis: str) -> None:
-        """Shared implementation for horizontal ('h') and vertical ('v') composite flip.
-
-        axis='h': mirrors left↔right around the group's X centre.
-        axis='v': mirrors up↔down around the group's Y centre.
-        """
-        if not self._composite_selected:
-            return
-        if not self.history_manager.is_restoring:
-            self._capture_current_state()
-
-        # Capture pre-flip state for annotation transforms
-        pre_flip_bbox = self._get_group_bbox() if len(self._composite_selected) > 1 else (0, 0, 0, 0)
-        pre_flip_gcx, pre_flip_gcy = self._get_group_center() if len(self._composite_selected) > 1 else (0, 0)
-        pivot = pre_flip_gcx if axis == 'h' else pre_flip_gcy
-
-        selected = self.composite_transfer.get_selected_shapes() if hasattr(self, 'composite_transfer') and self.composite_transfer else []
-
-        if len(self._composite_selected) > 1:
-            for idx in self._composite_selected:
-                pos = self._composite_positions.get(idx, (0.0, 0.0))
-                if idx < len(self._composite_bboxes):
-                    bbox = self._composite_bboxes[idx]
-                    if bbox != (0, 0, 0, 0):
-                        if axis == 'h':
-                            shape_c = (bbox[0] + bbox[2]) / 2
-                            new_c = 2 * pivot - shape_c
-                            self._composite_positions[idx] = (pos[0] + (new_c - shape_c), pos[1])
-                        else:
-                            shape_c = (bbox[1] + bbox[3]) / 2
-                            new_c = 2 * pivot - shape_c
-                            self._composite_positions[idx] = (pos[0], pos[1] + (new_c - shape_c))
-
-                t = self._composite_transforms.setdefault(idx, {"flip_h": False, "flip_v": False, "base_side": 0})
-                num_sides = 4
-                shape_name_for_flip = ""
-                if idx < len(selected):
-                    shape_name_for_flip = selected[idx]
-                    config = ShapeConfigProvider.get(shape_name_for_flip)
-                    num_sides = config.num_sides if config.num_sides > 0 else 4
-
-                effective_side = t["base_side"]
-                if num_sides >= 4 and config.uses_base_side_flip:
-                    # Normalise accumulated flag flips into base_side first
-                    if t["flip_v"]:
-                        effective_side = (effective_side + 2) % num_sides
-                        t["flip_v"] = False
-                    if t["flip_h"]:
-                        if effective_side in (1, 3):
-                            effective_side = 4 - effective_side
-                        t["flip_h"] = False
-
-                    if axis == 'h':
-                        # Horizontal mirror: left↔right sides (1↔3)
-                        if effective_side in (1, 3):
-                            effective_side = 4 - effective_side
-                    else:
-                        # Vertical mirror: top↔bottom sides (0↔2)
-                        if effective_side in (0, 2):
-                            effective_side = 2 - effective_side
-                    t["base_side"] = effective_side
-                else:
-                    # 3-sided shapes and prisms: toggle the flag directly
-                    if axis == 'h':
-                        t["flip_h"] = not t["flip_h"]
-                    else:
-                        t["flip_v"] = not t["flip_v"]
-        else:
-            for idx in self._composite_selected:
-                t = self._composite_transforms.setdefault(idx, {"flip_h": False, "flip_v": False, "base_side": 0})
-                if axis == 'h':
-                    t["flip_h"] = not t["flip_h"]
-                else:
-                    t["flip_v"] = not t["flip_v"]
-                # Flip annotations within this single shape's bbox
-                if idx < len(self._composite_bboxes):
-                    bbox = self._composite_bboxes[idx]
-                    if bbox != (0, 0, 0, 0):
-                        if axis == 'h':
-                            shape_c = (bbox[0] + bbox[2]) / 2
-                            lbl_idxs, dim_idxs = self._get_annotations_in_region(*bbox)
-                            if lbl_idxs or dim_idxs:
-                                self._flip_annotations_h(lbl_idxs, dim_idxs, shape_c)
-                        else:
-                            shape_c = (bbox[1] + bbox[3]) / 2
-                            lbl_idxs, dim_idxs = self._get_annotations_in_region(*bbox)
-                            if lbl_idxs or dim_idxs:
-                                self._flip_annotations_v(lbl_idxs, dim_idxs, shape_c)
-
-        # Flip annotations within the pre-flip group area (multi-shape case)
-        if len(self._composite_selected) > 1 and pre_flip_bbox != (0, 0, 0, 0):
-            all_sel = self._all_shapes_selected()
-            lbl_idxs, dim_idxs = self._get_annotations_in_region(*pre_flip_bbox, include_all=all_sel)
-            if lbl_idxs or dim_idxs:
-                if axis == 'h':
-                    self._flip_annotations_h(lbl_idxs, dim_idxs, pre_flip_gcx)
-                else:
-                    self._flip_annotations_v(lbl_idxs, dim_idxs, pre_flip_gcy)
-
-        self.generate_plot()
-        if not self.history_manager.is_restoring:
-            self._capture_current_state(force=True)
-
-    def _composite_flip_h(self) -> None:
-        """Flip selected shapes horizontally (left↔right) around their collective centre."""
-        self._composite_flip('h')
-
-    def _composite_flip_v(self) -> None:
-        """Flip selected shapes vertically (up↔down) around their collective centre."""
-        self._composite_flip('v')
-    
-    def _composite_rotate(self, direction: int) -> None:
-        """Rotate selected shapes as a group around their collective center.
-        
-        For group rotation, this is a two-pass process:
-        1. Record pre-rotation shape centers, compute target positions by rotating
-           around group center, then apply individual shape rotations.
-        2. Redraw to get post-rotation bounding boxes, then correct positions so
-           each shape's new center lands at its target position.
-        """
-        if not self._composite_selected:
-            return
-        if not hasattr(self, 'composite_transfer') or self.composite_transfer is None:
-            return
-        selected = self.composite_transfer.get_selected_shapes()
-        
-        if not self.history_manager.is_restoring:
-            self._capture_current_state()
-        
-        # Capture pre-rotation center and bbox for annotation transforms
-        pre_rot_center = None
-        pre_rot_bbox = (0, 0, 0, 0)
-        if len(self._composite_selected) > 1:
-            pre_rot_bbox = self._get_group_bbox()
-            centers_pre = []
-            for idx in self._composite_selected:
-                if idx < len(self._composite_bboxes):
-                    bbox = self._composite_bboxes[idx]
-                    if bbox != (0, 0, 0, 0):
-                        centers_pre.append(((bbox[0] + bbox[2]) / 2,
-                                            (bbox[1] + bbox[3]) / 2))
-            if centers_pre:
-                pre_rot_center = (sum(o[0] for o in centers_pre) / len(centers_pre),
-                                  sum(o[1] for o in centers_pre) / len(centers_pre))
-        
-        if len(self._composite_selected) > 1:
-            # Always use bbox centers for consistent group rotation.
-            # Snap-anchor "last = canonical origin" is unreliable for 3D shapes
-            # whose visual center differs from their canonical (0,0) origin.
-            shape_centers = {}
-            for idx in self._composite_selected:
-                if idx < len(self._composite_bboxes):
-                    bbox = self._composite_bboxes[idx]
-                    if bbox != (0, 0, 0, 0):
-                        shape_centers[idx] = ((bbox[0] + bbox[2]) / 2,
-                                              (bbox[1] + bbox[3]) / 2)
-
-            if not shape_centers:
-                return
-
-            # Group center = centroid of all selected shape centers
-            gcx = sum(o[0] for o in shape_centers.values()) / len(shape_centers)
-            gcy = sum(o[1] for o in shape_centers.values()) / len(shape_centers)
-
-            # Pass 1: Compute where each shape's bbox center should land after
-            # rotating 90° around the group center, then advance each shape's
-            # individual orientation by one step.
-            target_centers = {}
-            for idx in self._composite_selected:
-                if idx in shape_centers:
-                    ox, oy = shape_centers[idx]
-                    rx = ox - gcx
-                    ry = oy - gcy
-                    if direction == 1:  # CW
-                        new_rx, new_ry = ry, -rx
-                    else:  # CCW
-                        new_rx, new_ry = -ry, rx
-                    target_centers[idx] = (gcx + new_rx, gcy + new_ry)
-
-                # Apply individual shape rotation with flip normalization
-                if idx < len(selected):
-                    shape_name = selected[idx]
-                    config = ShapeConfigProvider.get(shape_name)
-                    num_sides = config.num_sides if config.num_sides > 0 else 4
-                    t = self._composite_transforms.setdefault(idx, {"flip_h": False, "flip_v": False, "base_side": 0})
-
-                    # Advance orientation by one step, preserving flip state exactly
-                    # as single-shape rotation does. Normalizing flips into base_side
-                    # was discarding flip state and causing visible reversion.
-                    t["base_side"] = (t["base_side"] + direction) % num_sides
-
-            # Pass 2: Redraw with rotated shapes to get new bounding boxes.
-            # Do NOT reset _composite_view_limits here so grid positions stay frozen.
-            self.generate_plot()
-
-            # Pass 3: Correct positions so each shape's new bbox center matches target
-            for idx, (target_cx, target_cy) in target_centers.items():
-                actual_cx, actual_cy = None, None
-                if idx < len(self._composite_bboxes):
-                    new_bbox = self._composite_bboxes[idx]
-                    if new_bbox != (0, 0, 0, 0):
-                        actual_cx = (new_bbox[0] + new_bbox[2]) / 2
-                        actual_cy = (new_bbox[1] + new_bbox[3]) / 2
-
-                if actual_cx is not None:
-                    correction_dx = target_cx - actual_cx
-                    correction_dy = target_cy - actual_cy
-                    pos = self._composite_positions.get(idx, (0.0, 0.0))
-                    self._composite_positions[idx] = (pos[0] + correction_dx, pos[1] + correction_dy)
-        else:
-            # Single shape: rotate it and move any annotations within its bbox
-            for idx in self._composite_selected:
-                if idx >= len(selected):
-                    continue
-                shape_name = selected[idx]
-                config = ShapeConfigProvider.get(shape_name)
-                num_sides = config.num_sides if config.num_sides > 0 else 4
-                t = self._composite_transforms.setdefault(idx, {"flip_h": False, "flip_v": False, "base_side": 0})
-                t["base_side"] = (t["base_side"] + direction) % num_sides
-                
-                # Rotate annotations that fall within this shape's pre-rotation bbox
-                if idx < len(self._composite_bboxes):
-                    bbox = self._composite_bboxes[idx]
-                    if bbox != (0, 0, 0, 0):
-                        shape_cx = (bbox[0] + bbox[2]) / 2
-                        shape_cy = (bbox[1] + bbox[3]) / 2
-                        lbl_idxs, dim_idxs = self._get_annotations_in_region(*bbox)
-                        if lbl_idxs or dim_idxs:
-                            self._rotate_annotations(lbl_idxs, dim_idxs, shape_cx, shape_cy, direction)
-        
-        # Rotate annotations using the pre-rotation center and region
-        if len(self._composite_selected) > 1 and pre_rot_center is not None:
-            rot_cx, rot_cy = pre_rot_center
-            all_sel = self._all_shapes_selected()
-            lbl_idxs, dim_idxs = self._get_annotations_in_region(*pre_rot_bbox, include_all=all_sel)
-            if lbl_idxs or dim_idxs:
-                self._rotate_annotations(lbl_idxs, dim_idxs, rot_cx, rot_cy, direction)
-        
-        # Recalculate view after transform
-        self._composite_view_limits = None
-        
-        # Final redraw with corrected positions
-        self.generate_plot()
-        if not self.history_manager.is_restoring:
-            self._capture_current_state(force=True)
-
     def _draw_composite_shapes(self, selected_shapes: list[str]) -> None:
         """Draw each selected shape, positioned by grid layout + user drag offsets."""
         n = len(selected_shapes)
@@ -11081,17 +11099,6 @@ if __name__ == "__main__":
 
 
 # ================== REFACTOR SESSION NOTES =============================
-# Last completed: Batch 6 (Architecture — partial) — all tests passed.
+# Last completed: Batch 8 (6a CompositeDragController extraction) — all tests passed.
+# Versioning moved to Git — no version numbers in source.
 
-# REMAINING BATCHES
-# -----------------
-#
-# Batch 6 — Architecture (partial)
-#   - [6a] DEFERRED — CompositeDragController extraction. 282 references across
-#     GeometryApp; composite drag methods are deeply entangled with generate_plot,
-#     history_manager, shape_var, canvas, label_manager, and _shape_bounds.
-#     Extraction requires a dedicated multi-session pass to avoid breaking
-#     composite mode. Scope is too large to bundle safely with 6c/6d.
-#   - [6b] DEFERRED — StandaloneAnnotationController extraction. Same reason as
-#     6a; standalone handlers share state with GeometryApp. Smaller scope (64
-#     refs) but risk profile is identical. Defer to same dedicated session as 6a.
