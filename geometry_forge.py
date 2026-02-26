@@ -4593,7 +4593,7 @@ class CompositeDragController:
             return
         if not app._is_composite_shape():
             return
-        if not hasattr(app, '_composite_bboxes') or not app._composite_bboxes:
+        if not app._composite_bboxes:
             return
         mx, my = event.xdata, event.ydata
         if mx is None or my is None:
@@ -4601,13 +4601,13 @@ class CompositeDragController:
 
         # Double-click → enter edit mode
         if getattr(event, 'dblclick', False):
-            if hasattr(app, '_composite_dim_label_bboxes'):
+            if app._composite_dim_label_bboxes is not None:
                 for idx in reversed(range(len(app._composite_dim_label_bboxes))):
                     bbox = app._composite_dim_label_bboxes[idx]
                     if bbox[0] <= mx <= bbox[2] and bbox[1] <= my <= bbox[3]:
                         self.enter_edit("dim", idx)
                         return
-            if hasattr(app, '_composite_label_bboxes'):
+            if app._composite_label_bboxes is not None:
                 for idx in reversed(range(len(app._composite_label_bboxes))):
                     bbox = app._composite_label_bboxes[idx]
                     if bbox[0] <= mx <= bbox[2] and bbox[1] <= my <= bbox[3]:
@@ -4620,7 +4620,7 @@ class CompositeDragController:
                 return
 
         # Dim endpoint hit
-        if hasattr(app, '_composite_dim_endpoints'):
+        if app._composite_dim_endpoints is not None:
             for idx, endpoints in enumerate(app._composite_dim_endpoints):
                 for ep_key in ("p1", "p2"):
                     if ep_key not in endpoints:
@@ -4644,7 +4644,7 @@ class CompositeDragController:
                         return
 
         # Dim line label hit
-        if hasattr(app, '_composite_dim_label_bboxes'):
+        if app._composite_dim_label_bboxes is not None:
             for idx in reversed(range(len(app._composite_dim_label_bboxes))):
                 bbox = app._composite_dim_label_bboxes[idx]
                 if bbox[0] <= mx <= bbox[2] and bbox[1] <= my <= bbox[3]:
@@ -4667,7 +4667,7 @@ class CompositeDragController:
                     return
 
         # Dim line body hit
-        if hasattr(app, '_composite_dim_lines') or True:
+        if True:  # always draw dim lines overlay
             for idx in reversed(range(len(self.dim_lines))):
                 dim = self.dim_lines[idx]
                 x1, y1 = dim["x1"], dim["y1"]
@@ -4700,7 +4700,7 @@ class CompositeDragController:
                     return
 
         # Label hit
-        if hasattr(app, '_composite_label_bboxes'):
+        if app._composite_label_bboxes is not None:
             for idx in reversed(range(len(app._composite_label_bboxes))):
                 bbox = app._composite_label_bboxes[idx]
                 if bbox[0] <= mx <= bbox[2] and bbox[1] <= my <= bbox[3]:
@@ -4853,7 +4853,7 @@ class CompositeDragController:
                     x2 = x1
                 elif self.dim_mode == "width":
                     y2 = y1
-                if hasattr(app, '_dim_preview_line') and app._dim_preview_line:
+                if app._dim_preview_line:
                     try:
                         app._dim_preview_line.remove()
                     except (ValueError, AttributeError):
@@ -4895,15 +4895,15 @@ class CompositeDragController:
                 mx, my = event.xdata, event.ydata
                 hit = False
                 hit_radius = max((app.ax.get_xlim()[1] - app.ax.get_xlim()[0]) * 0.015, 0.2)
-                if hasattr(app, '_composite_label_bboxes'):
+                if app._composite_label_bboxes is not None:
                     for bbox in app._composite_label_bboxes:
                         if bbox[0] <= mx <= bbox[2] and bbox[1] <= my <= bbox[3]:
                             hit = True; break
-                if not hit and hasattr(app, '_composite_dim_label_bboxes'):
+                if not hit and app._composite_dim_label_bboxes is not None:
                     for bbox in app._composite_dim_label_bboxes:
                         if bbox[0] <= mx <= bbox[2] and bbox[1] <= my <= bbox[3]:
                             hit = True; break
-                if not hit and hasattr(app, '_composite_dim_endpoints'):
+                if not hit and app._composite_dim_endpoints is not None:
                     for ep in app._composite_dim_endpoints:
                         p1, p2 = ep["p1"], ep["p2"]
                         for pt in (p1, p2):
@@ -4919,7 +4919,7 @@ class CompositeDragController:
                                     hit = True
                         if hit:
                             break
-                if not hit and hasattr(app, '_composite_bboxes'):
+                if not hit and app._composite_bboxes is not None:
                     for bbox in app._composite_bboxes:
                         if bbox != (0, 0, 0, 0) and bbox[0] <= mx <= bbox[2] and bbox[1] <= my <= bbox[3]:
                             hit = True; break
@@ -4944,7 +4944,7 @@ class CompositeDragController:
         new_x = drag["orig_pos"][0] + dx
         new_y = drag["orig_pos"][1] + dy
 
-        if "half_w" not in drag and hasattr(app, '_composite_bboxes') and idx < len(app._composite_bboxes):
+        if "half_w" not in drag and idx < len(app._composite_bboxes):
             bbox = app._composite_bboxes[idx]
             if bbox != (0, 0, 0, 0):
                 drag["half_w"] = (bbox[2] - bbox[0]) / 2
@@ -4965,14 +4965,14 @@ class CompositeDragController:
                     other_bboxes.append((0, 0, 0, 0))
                 else:
                     other_bboxes.append(bbox)
-            if hasattr(app, '_composite_snap_anchors') and idx < len(app._composite_snap_anchors):
+            if idx < len(app._composite_snap_anchors):
                 cur_pos = self.positions.get(idx, (0.0, 0.0))
                 anchor_shift_x = new_x - cur_pos[0]
                 anchor_shift_y = new_y - cur_pos[1]
                 orig_anchors = app._composite_snap_anchors[idx]
                 app._composite_snap_anchors[idx] = [(ax2 + anchor_shift_x, ay2 + anchor_shift_y) for ax2, ay2 in orig_anchors]
             snap_dx, snap_dy, guides = self.calc_snap(idx, prov_bbox, other_bboxes)
-            if hasattr(app, '_composite_snap_anchors') and idx < len(app._composite_snap_anchors):
+            if idx < len(app._composite_snap_anchors):
                 app._composite_snap_anchors[idx] = orig_anchors
             new_x += snap_dx; new_y += snap_dy
             self.snap_guides = guides
@@ -5071,7 +5071,7 @@ class CompositeDragController:
                         additive = bool(state & 0x4) or bool(state & 0x10)
                     if not additive:
                         self.selected.clear()
-                    if hasattr(app, '_composite_bboxes'):
+                    if app._composite_bboxes is not None:
                         for i, bbox in enumerate(app._composite_bboxes):
                             if bbox == (0, 0, 0, 0):
                                 continue
@@ -5134,7 +5134,7 @@ class CompositeDragController:
         d_cx = (d_left + d_right) / 2; d_cy = (d_bottom + d_top) / 2
         best_x_dist = threshold; best_y_dist = threshold
         best_x_is_anchor = False; best_y_is_anchor = False
-        has_anchors = hasattr(app, '_composite_snap_anchors') and app._composite_snap_anchors
+        has_anchors = bool(app._composite_snap_anchors)
         drag_anchors = []
         if has_anchors and drag_idx < len(app._composite_snap_anchors):
             drag_anchors = app._composite_snap_anchors[drag_idx]
@@ -5201,7 +5201,7 @@ class CompositeDragController:
     def update_selection_ui(self) -> None:
         """Update listbox selection to match self.selected."""
         app = self.app
-        if hasattr(app, 'composite_transfer') and app.composite_transfer is not None:
+        if app.composite_transfer is not None:
             dest = app.composite_transfer.dest_listbox
             dest.selection_clear(0, tk.END)
             for idx in self.selected:
@@ -5215,7 +5215,7 @@ class CompositeDragController:
     def get_group_center(self) -> tuple[float, float]:
         """Calculate the center of all selected shapes' bounding boxes."""
         app = self.app
-        if not self.selected or not hasattr(app, '_composite_bboxes'):
+        if not self.selected or not app._composite_bboxes is not None:
             return (0.0, 0.0)
         xs, ys = [], []
         for idx in self.selected:
@@ -5231,7 +5231,7 @@ class CompositeDragController:
     def get_group_bbox(self) -> tuple[float, float, float, float]:
         """Get the bounding box encompassing all selected shapes."""
         app = self.app
-        if not self.selected or not hasattr(app, '_composite_bboxes'):
+        if not self.selected or not app._composite_bboxes is not None:
             return (0, 0, 0, 0)
         x_mins, y_mins, x_maxs, y_maxs = [], [], [], []
         for idx in self.selected:
@@ -5248,7 +5248,7 @@ class CompositeDragController:
     def all_shapes_selected(self) -> bool:
         """Check if every shape in the composite is selected."""
         app = self.app
-        if not hasattr(app, 'composite_transfer') or app.composite_transfer is None:
+        if app.composite_transfer is None:
             return False
         total = app.composite_transfer.dest_listbox.size()
         return total > 0 and len(self.selected) >= total
@@ -5348,13 +5348,13 @@ class CompositeDragController:
     def start_dim_mode(self, mode: str) -> None:
         """Enter dimension line placement mode."""
         app = self.app
-        text = app._composite_label_entry.get().strip() if hasattr(app, '_composite_label_entry') else ""
+        text = app._composite_label_entry.get().strip() if app._composite_label_entry is not None else ""
         if not text:
             defaults = {"height": "h", "width": "w", "radius": "r", "free": "d"}
             text = defaults.get(mode, "d")
         self.dim_mode = mode
         self.dim_first_point = None
-        if hasattr(app, '_dim_status_label'):
+        if app._dim_status_label is not None:
             app._dim_status_label.config(text=f"Click first point for {mode} dimension line...")
         app.root.config(cursor="crosshair")
 
@@ -5363,9 +5363,9 @@ class CompositeDragController:
         app = self.app
         self.dim_mode = None
         self.dim_first_point = None
-        if hasattr(app, '_dim_status_label'):
+        if app._dim_status_label is not None:
             app._dim_status_label.config(text="")
-        if hasattr(app, '_dim_preview_line') and app._dim_preview_line:
+        if app._dim_preview_line:
             try:
                 app._dim_preview_line.remove()
             except (ValueError, AttributeError):
@@ -5381,7 +5381,7 @@ class CompositeDragController:
         mode = self.dim_mode
         if self.dim_first_point is None:
             self.dim_first_point = (mx, my)
-            if hasattr(app, '_dim_status_label'):
+            if app._dim_status_label is not None:
                 app._dim_status_label.config(text=f"Click second point for {mode} dimension line...")
             return True
         else:
@@ -5391,7 +5391,7 @@ class CompositeDragController:
                 x2 = x1
             elif mode == "width":
                 y2 = y1
-            text = app._composite_label_entry.get().strip() if hasattr(app, '_composite_label_entry') else ""
+            text = app._composite_label_entry.get().strip() if app._composite_label_entry is not None else ""
             if not text:
                 defaults = {"height": "h", "width": "w", "radius": "r", "free": "d"}
                 text = defaults.get(mode, "d")
@@ -5402,7 +5402,7 @@ class CompositeDragController:
                 "constraint": mode if mode != "free" else None,
                 "label_x": mid_x, "label_y": mid_y
             })
-            if hasattr(app, '_composite_label_entry'):
+            if app._composite_label_entry is not None:
                 app._composite_label_entry.delete(0, tk.END)
             self.selected_dim = len(self.dim_lines) - 1
             self.cancel_dim_mode()
@@ -5416,7 +5416,7 @@ class CompositeDragController:
     def add_label(self) -> None:
         """Add a custom label to the composite canvas."""
         app = self.app
-        if not hasattr(app, '_composite_label_entry'):
+        if not app._composite_label_entry is not None:
             return
         text = app._composite_label_entry.get().strip()
         if not text:
@@ -5469,14 +5469,14 @@ class CompositeDragController:
         else:
             return
         self.edit_mode = {"type": edit_type, "idx": idx}
-        if hasattr(app, '_composite_label_entry'):
+        if app._composite_label_entry is not None:
             app._composite_label_entry.delete(0, tk.END)
             app._composite_label_entry.insert(0, existing)
             app._composite_label_entry.focus_set()
             app._composite_label_entry.select_range(0, tk.END)
-        if hasattr(app, '_composite_text_btn'):
+        if app._composite_text_btn is not None:
             app._composite_text_btn.config(text="Update")
-        if hasattr(app, '_composite_cancel_btn'):
+        if app._composite_cancel_btn is not None:
             app._composite_cancel_btn.pack(side=tk.LEFT, padx=1)
 
     def apply_edit(self) -> None:
@@ -5484,7 +5484,7 @@ class CompositeDragController:
         app = self.app
         if self.edit_mode is None:
             return
-        if not hasattr(app, '_composite_label_entry'):
+        if not app._composite_label_entry is not None:
             return
         new_text = app._composite_label_entry.get().strip()
         if not new_text:
@@ -5505,11 +5505,11 @@ class CompositeDragController:
         """Exit edit mode."""
         app = self.app
         self.edit_mode = None
-        if hasattr(app, '_composite_label_entry'):
+        if app._composite_label_entry is not None:
             app._composite_label_entry.delete(0, tk.END)
-        if hasattr(app, '_composite_text_btn'):
+        if app._composite_text_btn is not None:
             app._composite_text_btn.config(text="+ Text")
-        if hasattr(app, '_composite_cancel_btn'):
+        if app._composite_cancel_btn is not None:
             app._composite_cancel_btn.pack_forget()
 
     # ── Flip and rotate ───────────────────────────────────────────────────────
@@ -5526,7 +5526,7 @@ class CompositeDragController:
         pre_flip_gcx, pre_flip_gcy = self.get_group_center() if len(self.selected) > 1 else (0, 0)
         pivot = pre_flip_gcx if axis == 'h' else pre_flip_gcy
 
-        selected = app.composite_transfer.get_selected_shapes() if hasattr(app, 'composite_transfer') and app.composite_transfer else []
+        selected = app.composite_transfer.get_selected_shapes() if app.composite_transfer else []
 
         if len(self.selected) > 1:
             for idx in self.selected:
@@ -5620,7 +5620,7 @@ class CompositeDragController:
         app = self.app
         if not self.selected:
             return
-        if not hasattr(app, 'composite_transfer') or app.composite_transfer is None:
+        if app.composite_transfer is None:
             return
         selected = app.composite_transfer.get_selected_shapes()
         if not app.history_manager.is_restoring:
@@ -5709,6 +5709,120 @@ class CompositeDragController:
         app.generate_plot()
         if not app.history_manager.is_restoring:
             app._capture_current_state(force=True)
+
+    def on_change(self, operation: tuple = None) -> None:
+        """Called when the composite transfer list selection changes (after the change).
+
+        Args:
+            operation: Explicit operation tuple from the transfer list:
+                ("add", new_index) — a shape was added at the given index
+                ("remove", removed_index) — a shape was removed at the given index
+                ("swap", idx_a, idx_b) — two shapes were swapped (reorder)
+                None — bulk restore (e.g. undo/redo via set_selected_shapes)
+        """
+        app = self.app
+        if app.composite_transfer is not None:
+            new_shapes = app.composite_transfer.get_selected_shapes()
+            n = len(new_shapes)
+
+            if operation is not None:
+                op_type = operation[0]
+
+                if op_type == "swap":
+                    swap_a, swap_b = operation[1], operation[2]
+                    pos_a = self.positions.get(swap_a, (0.0, 0.0))
+                    pos_b = self.positions.get(swap_b, (0.0, 0.0))
+                    self.positions[swap_a] = pos_b
+                    self.positions[swap_b] = pos_a
+                    tfm_a = self.transforms.get(swap_a, {"flip_h": False, "flip_v": False, "base_side": 0})
+                    tfm_b = self.transforms.get(swap_b, {"flip_h": False, "flip_v": False, "base_side": 0})
+                    self.transforms[swap_a] = tfm_b
+                    self.transforms[swap_b] = tfm_a
+
+                elif op_type == "remove":
+                    removed_idx = operation[1]
+                    new_positions = {}
+                    new_transforms = {}
+                    for k, v in self.positions.items():
+                        if k < removed_idx:
+                            new_positions[k] = v
+                        elif k > removed_idx:
+                            new_positions[k - 1] = v
+                    for k, v in self.transforms.items():
+                        if k < removed_idx:
+                            new_transforms[k] = v
+                        elif k > removed_idx:
+                            new_transforms[k - 1] = v
+                    self.positions = new_positions
+                    self.transforms = new_transforms
+
+                elif op_type == "add":
+                    new_idx = operation[1]
+                    # Explicitly clear any stale position/transform for the new index
+                    # so Phase 2 grid assignment always gives it a fresh cell.
+                    # Without this, if a shape was previously at this index then
+                    # removed (and indices shifted), the old absolute position can
+                    # survive the shift and cause the new shape to appear on top of
+                    # an existing shape rather than in an empty grid cell.
+                    self.positions.pop(new_idx, None)
+                    self.transforms.pop(new_idx, None)
+
+            # Clean up stale entries
+            self.positions = {k: v for k, v in self.positions.items() if k < n}
+            self.transforms = {k: v for k, v in self.transforms.items() if k < n}
+            self.selected.clear()
+            app._composite_view_limits = None  # Force view recalculation
+
+        app.generate_plot()
+        if not app.history_manager.is_restoring:
+            app._capture_current_state()
+
+    def on_delete(self, event=None) -> None:
+        """Delete selected composite shapes or label."""
+        app = self.app
+        if not app._is_composite_shape():
+            return
+
+        # Prevent deletion while typing in the label entry
+        if isinstance(app.root.focus_get(), tk.Entry):
+            return
+
+        if self.selected_label is not None or self.selected_dim is not None:
+            self.remove_selected_annotation()
+            return
+
+        if not self.selected:
+            return
+        if app.composite_transfer is None:
+            return
+
+        # Remove shapes from highest index to lowest (to avoid shifting issues)
+        for idx in sorted(self.selected, reverse=True):
+            if idx < app.composite_transfer.dest_listbox.size():
+                app.composite_transfer.dest_listbox.delete(idx)
+
+                # Shift positions and transforms down
+                new_positions = {}
+                new_transforms = {}
+                for k, v in self.positions.items():
+                    if k < idx:
+                        new_positions[k] = v
+                    elif k > idx:
+                        new_positions[k - 1] = v
+                for k, v in self.transforms.items():
+                    if k < idx:
+                        new_transforms[k] = v
+                    elif k > idx:
+                        new_transforms[k - 1] = v
+                self.positions = new_positions
+                self.transforms = new_transforms
+
+        self.selected.clear()
+
+        self.update_selection_ui()
+        app.generate_plot()
+        if not app.history_manager.is_restoring:
+            app._capture_current_state()
 
     def reset(self) -> None:
         """Clear all composite annotation and selection state."""
@@ -5926,7 +6040,7 @@ class StandaloneAnnotationController:
                 self.dim_first_point = (x, y)
             else:
                 x1, y1 = self.dim_first_point
-                text = app._standalone_label_entry.get().strip() if hasattr(app, '_standalone_label_entry') else "f"
+                text = app._standalone_label_entry.get().strip() if app._standalone_label_entry is not None else "f"
                 if not text:
                     text = "f"
                 mid_x = (x1 + x) / 2
@@ -6222,7 +6336,7 @@ class StandaloneAnnotationController:
             app.generate_plot()
             text, show = app.label_manager.get_entry_values(key)
             if text and show:
-                font_size = app.font_size_var.get() if hasattr(app, 'font_size_var') else 12
+                font_size = app.font_size_var.get() if app.font_size_var is not None else 12
                 app.ax.text(x, y, text,
                             fontsize=font_size, color="#0066cc", fontweight="bold",
                             fontfamily=getattr(app, 'font_family', AppConstants.DEFAULT_FONT_FAMILY),
@@ -6295,7 +6409,7 @@ class StandaloneAnnotationController:
                 pass
             self.dim_preview_line = None
         app.root.config(cursor="arrow")
-        if hasattr(app, '_standalone_cancel_dim_btn'):
+        if app._standalone_cancel_dim_btn is not None:
             app._standalone_cancel_dim_btn.grid_remove()
             app._standalone_free_btn.grid()
         app.generate_plot()
@@ -6305,7 +6419,7 @@ class StandaloneAnnotationController:
     def add_label(self) -> None:
         """Add a freeform text label to the standalone canvas."""
         app = self.app
-        if not hasattr(app, '_standalone_label_entry'):
+        if not app._standalone_label_entry is not None:
             return
         text = app._standalone_label_entry.get().strip()
         if not text:
@@ -6325,7 +6439,7 @@ class StandaloneAnnotationController:
         """Add a preset dimension line to the standalone canvas."""
         app = self.app
         text = default_text
-        if hasattr(app, '_standalone_label_entry'):
+        if app._standalone_label_entry is not None:
             entry_text = app._standalone_label_entry.get().strip()
             if entry_text:
                 text = entry_text
@@ -6478,14 +6592,14 @@ class StandaloneAnnotationController:
         else:
             return
         self.edit_mode = {"type": edit_type, "idx": idx}
-        if hasattr(app, '_standalone_label_entry'):
+        if app._standalone_label_entry is not None:
             app._standalone_label_entry.delete(0, tk.END)
             app._standalone_label_entry.insert(0, existing)
             app._standalone_label_entry.focus_set()
             app._standalone_label_entry.select_range(0, tk.END)
-        if hasattr(app, '_standalone_text_btn'):
+        if app._standalone_text_btn is not None:
             app._standalone_text_btn.config(text="Update")
-        if hasattr(app, '_standalone_cancel_btn'):
+        if app._standalone_cancel_btn is not None:
             app._standalone_cancel_btn.pack(side=tk.LEFT, padx=1)
 
     def apply_edit(self) -> None:
@@ -6493,7 +6607,7 @@ class StandaloneAnnotationController:
         app = self.app
         if self.edit_mode is None:
             return
-        if not hasattr(app, '_standalone_label_entry'):
+        if not app._standalone_label_entry is not None:
             return
         new_text = app._standalone_label_entry.get().strip()
         if not new_text:
@@ -6520,11 +6634,11 @@ class StandaloneAnnotationController:
         """Exit edit mode, restore + Text button."""
         app = self.app
         self.edit_mode = None
-        if hasattr(app, '_standalone_label_entry'):
+        if app._standalone_label_entry is not None:
             app._standalone_label_entry.delete(0, tk.END)
-        if hasattr(app, '_standalone_text_btn'):
+        if app._standalone_text_btn is not None:
             app._standalone_text_btn.config(text="+ Text")
-        if hasattr(app, '_standalone_cancel_btn'):
+        if app._standalone_cancel_btn is not None:
             app._standalone_cancel_btn.pack_forget()
 
     def reset(self) -> None:
@@ -6604,10 +6718,54 @@ class GeometryApp:
         self.dimension_mode_var = tk.StringVar(value="Default")
         self.show_hashmarks_var = tk.BooleanVar(value=False)
 
+        # UI widget attributes — initialized to None so guards can use `is not None`
+        # instead of hasattr(). Set to real widgets during _setup_layout/_setup_canvas.
+        self.fig = None
+        self.canvas = None
+        self.composite_transfer = None
+        self.col_shape_type = None
+        self.col_transforms = None
+        self.col_inputs = None
+        self.col_dimlines = None
+        self.col_tools = None
+        self.controls_row = None
+        self.center_container = None
+        self.mode_help_label = None
+        self.clear_workspace_btn = None
+        self.save_btn = None
+        self.copy_btn = None
+        self.default_btn = None
+        self.font_label = None
+        self.font_spin = None
+        self.font_sans_btn = None
+        self.font_serif_btn = None
+        self.weight_label = None
+        self.line_width_spin = None
+        self.font_size_var = None
+        self.line_width_var = None
+        self._dim_status_label = None
+        self._composite_label_entry = None
+        self._composite_text_btn = None
+        self._composite_cancel_btn = None
+        self._composite_bboxes = []
+        self._composite_snap_anchors = []
+        self._composite_view_limits = None
+        self._composite_dim_label_bboxes = []
+        self._composite_label_bboxes = []
+        self._composite_dim_endpoints = []
+        self._composite_dim_lines = []
+        self._standalone_label_entry = None
+        self._standalone_text_btn = None
+        self._standalone_cancel_btn = None
+        self._standalone_cancel_dim_btn = None
+        self._standalone_free_btn = None
+        self._dim_preview_line = None
+        self.tri_buttons = None
+        self.poly_buttons = None
+
         self._setup_data()
         self._setup_layout()
         self._setup_canvas_and_controllers()
-
     # Button press feedback removed - macOS theming is inconsistent; use default OS behavior
 
     # ---------------- Error/Info messaging (standardized) ----------------
@@ -6920,7 +7078,7 @@ class GeometryApp:
     def _get_preset_value_key(self, preset_key: str) -> Optional[str]:
         """Map a dim line preset key to the Custom mode entry key for value population."""
         shape = self.shape_var.get()
-        tri_type = self.triangle_type_var.get() if hasattr(self, 'triangle_type_var') else "Custom"
+        tri_type = self.triangle_type_var.get()
         mapping = {
             "Rectangle": {"height": "Width", "width": "Length"},
             "Parallelogram": {
@@ -7003,7 +7161,7 @@ class GeometryApp:
         
         # Measure top bar with all buttons visible
         top_width = self.center_container.winfo_reqwidth() + 20
-        controls_width = self.controls_row.winfo_reqwidth() + 20 if hasattr(self, 'controls_row') else 0
+        controls_width = self.controls_row.winfo_reqwidth() + 20 if self.controls_row is not None else 0
         app_width = max(top_width, controls_width)
         
         # Hide Save/Copy again (show_welcome will control visibility)
@@ -7017,7 +7175,7 @@ class GeometryApp:
         # Total height
         self.root.update_idletasks()
         top_h = self.top_bar.winfo_reqheight()
-        controls_h = self.controls_row.winfo_reqheight() if hasattr(self, 'controls_row') else 0
+        controls_h = self.controls_row.winfo_reqheight() if self.controls_row is not None else 0
         shortcut_h = 25
         total_height = top_h + controls_h + canvas_h + shortcut_h
         
@@ -7375,9 +7533,9 @@ class GeometryApp:
         """Clean up resources before closing the window."""
         self._disconnect_standalone_drag()
 
-        if hasattr(self, 'fig'):
+        if self.fig is not None:
             self.fig.clf()
-        if hasattr(self, 'canvas'):
+        if self.canvas is not None:
             canvas_widget = self.canvas.get_tk_widget()
             if canvas_widget.winfo_exists():
                 canvas_widget.destroy()
@@ -7677,7 +7835,7 @@ class GeometryApp:
         for w in self.input_frame.winfo_children():
             w.destroy()
         # Clear dim line column (col 3)
-        if hasattr(self, 'col_dimlines'):
+        if self.col_dimlines is not None:
             for w in self.col_dimlines.winfo_children():
                 w.destroy()
         self.input_controller.entries = {}
@@ -7700,7 +7858,7 @@ class GeometryApp:
         self._builtin_dim_endpoints = []
         self._builtin_selected = None
         # Clear composite transfer list reference and disconnect drag events
-        if hasattr(self, 'composite_transfer') and self.composite_transfer is not None:
+        if self.composite_transfer is not None:
             self._disconnect_composite_drag()
             self.composite_transfer = None
         # Explicitly NOT calling self.label_manager.clear_positions() here
@@ -7730,7 +7888,7 @@ class GeometryApp:
                 self.parallelogram_slope_var = tk.DoubleVar(value=0.5)
         
         config = ShapeConfigProvider.get(shape)
-        if hasattr(self, 'mode_help_label'):
+        if self.mode_help_label is not None:
             self.mode_help_label.config(text=config.help_text)
         
         # Don't pack right panel here - let caller handle it to avoid flash
@@ -7890,7 +8048,7 @@ class GeometryApp:
 
     def show_welcome(self) -> None:
         # Keep only Category (cols 0,1) and Shape (cols 2,3) visible in top bar
-        if hasattr(self, 'center_container'):
+        if self.center_container is not None:
             for slave in self.center_container.grid_slaves(row=0):
                 col = int(slave.grid_info()["column"])
                 if col <= 3:
@@ -7899,11 +8057,11 @@ class GeometryApp:
                     slave.grid_remove()
         
         # Hide all control columns
-        if hasattr(self, 'col_shape_type'): self.col_shape_type.grid_remove()
-        if hasattr(self, 'col_transforms'): self.col_transforms.grid_remove()
-        if hasattr(self, 'col_inputs'): self.col_inputs.grid_remove()
-        if hasattr(self, 'col_dimlines'): self.col_dimlines.grid_remove()
-        if hasattr(self, 'col_tools'): self.col_tools.grid_remove()
+        if self.col_shape_type is not None: self.col_shape_type.grid_remove()
+        if self.col_transforms is not None: self.col_transforms.grid_remove()
+        if self.col_inputs is not None: self.col_inputs.grid_remove()
+        if self.col_dimlines is not None: self.col_dimlines.grid_remove()
+        if self.col_tools is not None: self.col_tools.grid_remove()
         
         self.ax.clear()
         self.plot_controller.setup_axes()
@@ -7987,7 +8145,7 @@ class GeometryApp:
 
     def _update_triangle_button_styles(self) -> None:
         """Highlight active triangle button using standardized active state colors."""
-        if not hasattr(self, 'tri_buttons'):
+        if not self.tri_buttons is not None:
             return
         current = self.triangle_type_var.get()
         for name, btn in self.tri_buttons.items():
@@ -8206,7 +8364,7 @@ class GeometryApp:
 
             # Restore composite transfer list and positions if applicable
             composite_shapes = state.get("composite_shapes", [])
-            if self._is_composite_shape(new_shape) and hasattr(self, 'composite_transfer') and self.composite_transfer is not None:
+            if self._is_composite_shape(new_shape) and self.composite_transfer is not None:
                 self.composite_transfer.set_selected_shapes(composite_shapes)
                 self._composite_positions = dict(state.get("composite_positions", {}))
                 self._composite_transforms = {k: dict(v) for k, v in state.get("composite_transforms", {}).items()}
@@ -8217,14 +8375,14 @@ class GeometryApp:
                 self._composite_selected_dim = None
 
             # Restore line width
-            if hasattr(self, 'line_width_var'):
+            if self.line_width_var is not None:
                 lw = state.get("line_width", AppConstants.DEFAULT_LINE_WIDTH)
                 self.line_width = lw
                 self.line_width_var.set(lw)
                 self.plot_controller.set_line_width(lw)
 
             # Restore font size
-            if hasattr(self, 'font_size_var'):
+            if self.font_size_var is not None:
                 fs = state.get("font_size", AppConstants.DEFAULT_FONT_SIZE)
                 self.font_size = fs
                 self.font_size_var.set(fs)
@@ -8234,7 +8392,7 @@ class GeometryApp:
             ff = state.get("font_family", AppConstants.DEFAULT_FONT_FAMILY)
             self.font_family = ff
             self.plot_controller.set_font_family(ff)
-            if hasattr(self, 'font_sans_btn'):
+            if self.font_sans_btn is not None:
                 if ff == "serif":
                     self.font_sans_btn.config(relief=tk.RAISED, bg=AppConstants.DEFAULT_BUTTON_COLOR)
                     self.font_serif_btn.config(relief=tk.SUNKEN, bg=AppConstants.ACTIVE_BUTTON_COLOR)
@@ -8306,7 +8464,7 @@ class GeometryApp:
         composite_positions = {}
         composite_transforms = {}
         if (self._is_composite_shape(self.shape_var.get())
-                and hasattr(self, 'composite_transfer') and self.composite_transfer is not None):
+                and self.composite_transfer is not None):
             composite_selected = self.composite_transfer.get_selected_shapes()
             composite_positions = dict(self._composite_positions)
             composite_transforms = {k: dict(v) for k, v in self._composite_transforms.items()}
@@ -8315,7 +8473,7 @@ class GeometryApp:
             "cat": self.cat_var.get(),
             "shape": self.shape_var.get(),
             "font_size": self.font_size_var.get(),
-            "line_width": self.line_width_var.get() if hasattr(self, 'line_width_var') else AppConstants.DEFAULT_LINE_WIDTH,
+            "line_width": self.line_width_var.get() if self.line_width_var is not None else AppConstants.DEFAULT_LINE_WIDTH,
             "font_family": getattr(self, 'font_family', AppConstants.DEFAULT_FONT_FAMILY),
             "dim_mode": self.dimension_mode_var.get(),
             "tri_type": self.triangle_type_var.get(),
@@ -8456,7 +8614,7 @@ class GeometryApp:
 
     def _update_polygon_button_styles(self) -> None:
         """Highlight active polygon type button."""
-        if not hasattr(self, 'poly_buttons'):
+        if not self.poly_buttons is not None:
             return
         current = self.polygon_type_var.get()
         for name, btn in self.poly_buttons.items():
@@ -8493,27 +8651,27 @@ class GeometryApp:
         self._reset_transforms()
 
         # Hide control columns until a shape is selected
-        if hasattr(self, 'col_shape_type'):
+        if self.col_shape_type is not None:
             self.col_shape_type.grid_remove()
-        if hasattr(self, 'col_transforms'):
+        if self.col_transforms is not None:
             self.col_transforms.grid_remove()
-        if hasattr(self, 'col_inputs'):
+        if self.col_inputs is not None:
             self.col_inputs.grid_remove()
-        if hasattr(self, 'col_dimlines'):
+        if self.col_dimlines is not None:
             self.col_dimlines.grid_remove()
-        if hasattr(self, 'col_tools'):
+        if self.col_tools is not None:
             self.col_tools.grid_remove()
 
         # Hide right-panel widgets until a shape is selected
-        if hasattr(self, 'mode_help_label'):
+        if self.mode_help_label is not None:
             self.mode_help_label.pack_forget()
-        if hasattr(self, 'clear_workspace_btn'):
+        if self.clear_workspace_btn is not None:
             self.clear_workspace_btn.pack_forget()
 
         # Hide export buttons until a shape is selected
-        if hasattr(self, 'save_btn'):
+        if self.save_btn is not None:
             self.save_btn.grid_remove()
-        if hasattr(self, 'copy_btn'):
+        if self.copy_btn is not None:
             self.copy_btn.grid_remove()
 
         # Show welcome prompt so the user clearly knows they must pick a shape
@@ -8529,11 +8687,11 @@ class GeometryApp:
     def _rebuild_shape_ui_for_restore(self, shape: str) -> None:
         """Rebuild shape UI during state restoration without triggering captures."""
         # Show control columns
-        if hasattr(self, 'col_inputs'):
+        if self.col_inputs is not None:
             self.col_inputs.grid()
-        if hasattr(self, 'col_dimlines'):
+        if self.col_dimlines is not None:
             self.col_dimlines.grid()
-        if hasattr(self, 'col_tools'):
+        if self.col_tools is not None:
             self.col_tools.grid()
         
         self.save_btn.grid(row=0, column=10, padx=1, sticky="e")
@@ -8575,37 +8733,37 @@ class GeometryApp:
     
     def update_inputs(self, _: Optional[Any] = None) -> None:
 
-        if hasattr(self, 'center_container'):
+        if self.center_container is not None:
             # Re-show all controls in the top bar
             for slave in self.center_container.grid_slaves(row=0):
                 slave.grid()
         
         # Explicitly show export buttons
-        if hasattr(self, 'save_btn'):
+        if self.save_btn is not None:
             self.save_btn.grid(row=0, column=10, padx=1, sticky="e")
-        if hasattr(self, 'copy_btn'):
+        if self.copy_btn is not None:
             self.copy_btn.grid(row=0, column=11, padx=1, sticky="e")
         
         # Ensure font controls are visible
-        if hasattr(self, 'font_label') and self.font_label.winfo_exists():
+        if self.font_label.winfo_exists():
             self.font_label.grid()
-        if hasattr(self, 'font_spin') and self.font_spin.winfo_exists():
+        if self.font_spin.winfo_exists():
             self.font_spin.grid()
-        if hasattr(self, 'font_sans_btn') and self.font_sans_btn.winfo_exists():
+        if self.font_sans_btn.winfo_exists():
             self.font_sans_btn.grid()
-        if hasattr(self, 'font_serif_btn') and self.font_serif_btn.winfo_exists():
+        if self.font_serif_btn.winfo_exists():
             self.font_serif_btn.grid()
-        if hasattr(self, 'weight_label') and self.weight_label.winfo_exists():
+        if self.weight_label.winfo_exists():
             self.weight_label.grid()
-        if hasattr(self, 'line_width_spin') and self.line_width_spin.winfo_exists():
+        if self.line_width_spin.winfo_exists():
             self.line_width_spin.grid()
 
         # Show control columns
-        if hasattr(self, 'col_inputs'):
+        if self.col_inputs is not None:
             self.col_inputs.grid()
-        if hasattr(self, 'col_dimlines'):
+        if self.col_dimlines is not None:
             self.col_dimlines.grid()
-        if hasattr(self, 'col_tools'):
+        if self.col_tools is not None:
             self.col_tools.grid()
 
         # Only reset sliders if NOT restoring from history
@@ -8673,7 +8831,7 @@ class GeometryApp:
     
     def _show_help_text(self, text: str):
         """Update help text label."""
-        if hasattr(self, 'mode_help_label'):
+        if self.mode_help_label is not None:
             self.mode_help_label.config(text=text)
     
     def _build_standard_inputs(self, config: ShapeConfig) -> None:
@@ -8770,7 +8928,7 @@ class GeometryApp:
         self._standalone_dim_mode = True
         self._standalone_dim_first_point = None
         self.root.config(cursor="crosshair")
-        if hasattr(self, '_standalone_free_btn'):
+        if self._standalone_free_btn is not None:
             self._standalone_free_btn.grid_remove()
             self._standalone_cancel_dim_btn.grid()
 
@@ -8877,119 +9035,10 @@ class GeometryApp:
             self._capture_current_state()
 
     def _on_composite_change(self, operation: tuple = None) -> None:
-        """Called when the composite transfer list selection changes (after the change).
-        
-        Args:
-            operation: Explicit operation tuple from the transfer list:
-                ("add", new_index) — a shape was added at the given index
-                ("remove", removed_index) — a shape was removed at the given index
-                ("swap", idx_a, idx_b) — two shapes were swapped (reorder)
-                None — bulk restore (e.g. undo/redo via set_selected_shapes)
-        """
-        if hasattr(self, 'composite_transfer') and self.composite_transfer is not None:
-            new_shapes = self.composite_transfer.get_selected_shapes()
-            n = len(new_shapes)
-            
-            if operation is not None:
-                op_type = operation[0]
-                
-                if op_type == "swap":
-                    swap_a, swap_b = operation[1], operation[2]
-                    # Swap positions
-                    pos_a = self._composite_positions.get(swap_a, (0.0, 0.0))
-                    pos_b = self._composite_positions.get(swap_b, (0.0, 0.0))
-                    self._composite_positions[swap_a] = pos_b
-                    self._composite_positions[swap_b] = pos_a
-                    # Swap transforms
-                    tfm_a = self._composite_transforms.get(swap_a, {"flip_h": False, "flip_v": False, "base_side": 0})
-                    tfm_b = self._composite_transforms.get(swap_b, {"flip_h": False, "flip_v": False, "base_side": 0})
-                    self._composite_transforms[swap_a] = tfm_b
-                    self._composite_transforms[swap_b] = tfm_a
-                
-                elif op_type == "remove":
-                    removed_idx = operation[1]
-                    # Shift indices above removed_idx down by 1
-                    new_positions = {}
-                    new_transforms = {}
-                    for k, v in self._composite_positions.items():
-                        if k < removed_idx:
-                            new_positions[k] = v
-                        elif k > removed_idx:
-                            new_positions[k - 1] = v
-                    for k, v in self._composite_transforms.items():
-                        if k < removed_idx:
-                            new_transforms[k] = v
-                        elif k > removed_idx:
-                            new_transforms[k - 1] = v
-                    self._composite_positions = new_positions
-                    self._composite_transforms = new_transforms
-                
-                elif op_type == "add":
-                    new_idx = operation[1]
-                    # Explicitly clear any stale position/transform for the new index
-                    # so Phase 2 grid assignment always gives it a fresh cell.
-                    # Without this, if a shape was previously at this index then
-                    # removed (and indices shifted), the old absolute position can
-                    # survive the shift and cause the new shape to appear on top of
-                    # an existing shape rather than in an empty grid cell.
-                    self._composite_positions.pop(new_idx, None)
-                    self._composite_transforms.pop(new_idx, None)
-            
-            # Clean up stale entries
-            self._composite_positions = {k: v for k, v in self._composite_positions.items() if k < n}
-            self._composite_transforms = {k: v for k, v in self._composite_transforms.items() if k < n}
-            self._composite_selected.clear()
-            self._composite_view_limits = None  # Force view recalculation
-        
-        self.generate_plot()
-        if not self.history_manager.is_restoring:
-            self._capture_current_state()
+        self.composite_ctrl.on_change(operation)
 
     def _on_composite_delete(self, event=None) -> None:
-        """Delete selected composite shapes or label."""
-        if not self._is_composite_shape():
-            return
-        
-        # Prevent deletion while typing in the label entry
-        if isinstance(self.root.focus_get(), tk.Entry):
-            return
-
-        if self._composite_selected_label is not None or self._composite_selected_dim is not None:
-            self._remove_selected_annotation()
-            return
-        
-        if not self._composite_selected:
-            return
-        if not hasattr(self, 'composite_transfer') or self.composite_transfer is None:
-            return
-        
-        # Remove shapes from highest index to lowest (to avoid shifting issues)
-        for idx in sorted(self._composite_selected, reverse=True):
-            if idx < self.composite_transfer.dest_listbox.size():
-                self.composite_transfer.dest_listbox.delete(idx)
-                
-                # Shift positions and transforms down
-                new_positions = {}
-                new_transforms = {}
-                for k, v in self._composite_positions.items():
-                    if k < idx:
-                        new_positions[k] = v
-                    elif k > idx:
-                        new_positions[k - 1] = v
-                for k, v in self._composite_transforms.items():
-                    if k < idx:
-                        new_transforms[k] = v
-                    elif k > idx:
-                        new_transforms[k - 1] = v
-                self._composite_positions = new_positions
-                self._composite_transforms = new_transforms
-        
-        self._composite_selected.clear()
-        
-        self._update_composite_selection_ui()
-        self.generate_plot()
-        if not self.history_manager.is_restoring:
-            self._capture_current_state()
+        self.composite_ctrl.on_delete(event)
 
     def _on_delete_shortcut(self, event=None) -> None:
         """Handle Delete/Backspace key for both composite and standalone modes."""
@@ -9332,7 +9381,7 @@ class GeometryApp:
         is_dragging = (self._composite_drag_state is not None 
                        or self._composite_label_drag is not None)
         
-        if is_dragging and hasattr(self, '_composite_view_limits') and self._composite_view_limits is not None:
+        if is_dragging and self._composite_view_limits is not None:
             # Reuse cached view limits during drag for visual stability
             vx_min, vx_max, vy_min, vy_max = self._composite_view_limits
             self.ax.set_xlim(vx_min, vx_max)
@@ -9400,7 +9449,7 @@ class GeometryApp:
             in_group = (i in _annotations_in_group)
             color = "#0066cc" if (is_selected or in_group) else "black"
             weight = "bold" if is_selected else "normal"
-            font_size = self.font_size_var.get() if hasattr(self, 'font_size_var') else 12
+            font_size = self.font_size_var.get() if self.font_size_var is not None else 12
             
             edge = color if (is_selected or in_group) else "none"
             txt = self.ax.text(lbl["x"], lbl["y"], lbl["text"],
@@ -9434,7 +9483,7 @@ class GeometryApp:
         # Phase 6: Draw dimension lines
         self._composite_dim_endpoints = []
         self._composite_dim_label_bboxes = []
-        font_size = self.font_size_var.get() if hasattr(self, 'font_size_var') else 12
+        font_size = self.font_size_var.get() if self.font_size_var is not None else 12
         
         for i, dim in enumerate(self._composite_dim_lines):
             is_selected = (i == self._composite_selected_dim)
@@ -10238,7 +10287,7 @@ class GeometryApp:
     def _draw_standalone_labels(self) -> None:
         """Draw freeform labels and dimension lines on standalone shapes."""
         self._standalone_label_bboxes = []
-        font_size = self.font_size_var.get() if hasattr(self, 'font_size_var') else 12
+        font_size = self.font_size_var.get() if self.font_size_var is not None else 12
         
         for i, lbl in enumerate(self._standalone_labels):
             is_selected = (i == self._standalone_selected_label)
@@ -10455,7 +10504,7 @@ class GeometryApp:
                     self.label_manager.set_label_text(key, text, vis)
             
             # --- Composite shape rendering ---
-            if self._is_composite_shape(shape) and hasattr(self, 'composite_transfer'):
+            if self._is_composite_shape(shape) and self.composite_transfer is not None:
                 selected = self.composite_transfer.get_selected_shapes()
                 if not selected:
                     # Set paper-proportioned limits for empty canvas
@@ -10903,7 +10952,8 @@ if __name__ == "__main__":
 # B31. triangle doesn't rotate or flip with keys
 
 # ----------------- [CODE QUALITY & ARCHITECTURE] ----------------------
-
+# Q01. State snapshot delegation: each controller exposes get_state()/set_state(); _build_state_snapshot delegates
+# Q02. Split generate_plot into _generate_composite_plot() / _generate_standalone_plot() / _apply_transform_pipeline()
 # ----------------------- [GEOMETRY ENGINE] ----------------------------
 # G02. add more smart geometry features
 # G03. add right triangle preset
@@ -10916,25 +10966,3 @@ if __name__ == "__main__":
 # ------------------------ [FUTURE IDEAS] --------------------------------
 # F13. [high] Batch export: generate multiple variants (rotations/flips) in single operation
 # F14. [low] Snapping: Add coordinate snapping for "Move" mode to align labels perfectly
-
-
-# ================== REFACTOR ROADMAP ======================================
-# Last completed: Batch 8 (targeted fixes) — all tests passed.
-
-# ---
-# BATCH 9 — Composite Method Relocation  [NEXT]
-#
-#   C1  Move _on_composite_change + _on_composite_delete into CompositeDragController
-#       as on_change(operation) and on_delete(event); leave one-liner delegates on GeometryApp
-
-# ---
-# BATCH 10 — hasattr Sweep  [PLANNED]
-#
-#   C4  Initialize all 49 hasattr-guarded widget attributes to None in GeometryApp.__init__
-#       Replace hasattr guards with: if self.attr is not None
-
-# ---
-# FUTURE — Large Structural Work
-#
-#   C2  State snapshot delegation: each controller exposes get_state()/set_state(); _build_state_snapshot delegates
-#   C3  Split generate_plot into _generate_composite_plot() / _generate_standalone_plot() / _apply_transform_pipeline()
