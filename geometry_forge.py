@@ -630,286 +630,282 @@ class ShapeConfig:
         return self.has_feature(ShapeFeature.SLIDER_PEAK)
 
 
-class ShapeConfigProvider:
-    """Single source of truth for all shape configurations."""
-    
-    _configs: dict[str, ShapeConfig] = {}
-    _initialized: bool = False
-    
-    @classmethod
-    def _ensure_initialized(cls) -> None:
-        if cls._initialized:
-            return
-        cls._init_2d_shapes()
-        cls._init_3d_shapes()
-        cls._init_angle_shapes()
-        cls._init_composite_shapes()
-        cls._initialized = True
-    
-    @classmethod
-    def _init_2d_shapes(cls) -> None:
-        cls._configs["Rectangle"] = ShapeConfig(
-            labels=["Top", "Bottom", "Left", "Right"],
-            default_values=["a", "a", "b", "b"],
-            custom_values=["10", "5"],
-            custom_labels=["Length", "Width"],
-            features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True},
-            num_sides=4,
-            has_dimension_mode=True,
-            help_text="Default: Clean shape, add labels with presets.\nCustom: Enter Length and Width values."
-        )
-        cls._configs["Square"] = ShapeConfig(
-            labels=["Top", "Bottom", "Left", "Right"],
-            default_values=["a", "a", "a", "a"],
-            features={ShapeFeature.FLIP: False, ShapeFeature.ROTATE: False},
-            has_dimension_mode=False,
-            help_text="All sides equal. Labels only mode."
-        )
-        cls._configs["Circle"] = ShapeConfig(
-            labels=["Radius", "Diameter", "Circumference"],
-            default_values=["r", "", ""],
-            features={ShapeFeature.FLIP: False, ShapeFeature.ROTATE: False},
-            has_dimension_mode=False,
-            help_text="Defined by radius or diameter. Leave unused fields blank."
-        )
-        cls._configs["Parallelogram"] = ShapeConfig(
-            labels=["Top", "Bottom", "Left Side", "Right Side", "Height"],
-            default_values=["a", "a", "b", "b", "h"],
-            custom_values=["6", "4", ""],
-            custom_labels=["Length", "Height", "Side"],
-            features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.SLIDER_SLOPE: True, ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True},
-            num_sides=4,
-            has_dimension_mode=True,
-            help_text="Enter Length + Height, OR Length + Side.\nCustom: Slope slider adjusts lean."
-        )
-        cls._configs["Trapezoid"] = ShapeConfig(
-            labels=["Top", "Bottom", "Left Leg", "Right Leg", "Height"],
-            default_values=["a", "b", "c", "d", "h"],
-            custom_values=["3", "6", "4", "", ""],
-            custom_labels=["Top Base", "Bottom Base", "Height", "Left Side", "Right Side"],
-            features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True},
-            num_sides=4,
-            has_dimension_mode=True,
-            help_text="Enter Top + Bottom + Height, OR Top + Bottom + both Sides.\nCustom: Numeric values control exact dimensions."
-        )
-        cls._configs["Polygon"] = ShapeConfig(
-            labels=["Side Length"],
-            default_values=["a"],
-            features={ShapeFeature.HASH_MARKS: True},
-            has_dimension_mode=False,
-            help_text="Regular polygon. Choose Pentagon, Hexagon, or Octagon using the type buttons."
-        )
-        # Triangle configurations by type
-        _tri_base = dict(
-            labels=["Base Width", "Height", "Left Label", "Right Label"],
-            default_values=["b", "h", "c", "a"],
-            features={ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True},
-            has_dimension_mode=False,
-        )
-        cls._configs["Triangle"] = ShapeConfig(
-            **_tri_base,
-            num_sides=3,
-            help_text="Custom triangle defined by base and height."
-        )
-        # Composite-only triangle: identical draw to Triangle but num_sides=4 so
-        # rotation steps are 90° (matching Rectangle/Parallelogram) instead of 120°.
-        cls._configs["Tri Triangle"] = ShapeConfig(
-            **_tri_base,
-            num_sides=4,
-            uses_base_side_flip=False,
-            rotation_labels=["Base Down", "Left Side Down", "Base Up", "Right Side Down"],
-            help_text="Triangle (composite). Rotates in 90° steps."
-        )
-        cls._configs["Triangle_Custom"] = ShapeConfig(
-            labels=["Base Width", "Height", "Left Side", "Right Side"],
-            default_values=["b", "h", "c", "a"],
-            custom_values=["5", "4", "", ""],
-            custom_labels=["Base Width", "Height", "Left Side", "Right Side"],
-            features={ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True},
-            num_sides=3,
-            has_dimension_mode=True,
-            help_text="Enter Base + Height OR Base + both Sides (mutually exclusive)."
-        )
-        cls._configs["Triangle_Isosceles"] = ShapeConfig(
-            labels=["Base Label", "Left Label", "Right Label", "Height"],
-            default_values=["a", "b", "b", "h"],
-            features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True},
-            num_sides=3,
-            has_dimension_mode=False,
-            help_text="Isosceles triangle with two equal sides. Slider adjusts proportions."
-        )
-        cls._configs["Triangle_Scalene"] = ShapeConfig(
-            labels=["Side A (Bottom)", "Side B (Left)", "Side C (Right)", "Height"],
-            default_values=["a", "b", "c", "h"],
-            features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True, ShapeFeature.SLIDER_PEAK: True},
-            num_sides=3,
-            has_dimension_mode=False,
-            help_text="Scalene triangle with all different sides. Sliders adjust shape proportions."
-        )
-        cls._configs["Triangle_Equilateral"] = ShapeConfig(
-            labels=["Side A (Bottom)", "Side B (Left)", "Side C (Right)"],
-            default_values=["a", "a", "a"],
-            features={ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True},
-            num_sides=3,
-            has_dimension_mode=False,
-            help_text="Equilateral triangle with all equal sides."
-        )
-    
-    @classmethod
-    def _init_3d_shapes(cls) -> None:
-        cls._configs["Sphere"] = ShapeConfig(
-            labels=["Radius", "Diameter", "Circumference"],
-            default_values=["r", "", ""],
-            has_dimension_mode=False,
-            help_text="Defined by radius or diameter. Slider adjusts scale."
-        )
-        cls._configs["Hemisphere"] = ShapeConfig(
-            labels=["Radius", "Diameter", "Circumference"],
-            default_values=["r", "", ""],
-            features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True},
-            num_sides=4,
-            rotation_labels=[],
-            has_dimension_mode=False,
-            help_text="Defined by radius or diameter. Adjust Shape slider changes dome proportions (squat/tall)."
-        )
-        cls._configs["Cylinder"] = ShapeConfig(
-            labels=["Radius", "Diameter", "Height", "Circumference"],
-            default_values=["r", "", "h", ""],
-            custom_values=["5", "", "5"],
-            custom_labels=["Radius", "Diameter", "Height"],
-            features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: False, ShapeFeature.ROTATE: True},
-            num_sides=4,
-            rotation_labels=[],
-            has_dimension_mode=True,
-            help_text="Default: Clean shape, add labels with presets.\nCustom: Enter Radius or Diameter + Height."
-        )
-        cls._configs["Cone"] = ShapeConfig(
-            labels=["Radius", "Diameter", "Height", "Circumference"],
-            default_values=["r", "", "h", ""],
-            custom_values=["4", "", "9"],
-            custom_labels=["Radius", "Diameter", "Height"],
-            features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True},
-            num_sides=4,
-            rotation_labels=[],
-            has_dimension_mode=True,
-            help_text="Default: Clean shape, add labels with presets.\nCustom: Enter Radius or Diameter + Height."
-        )
-        cls._configs["Rectangular Prism"] = ShapeConfig(
-            labels=["Length (Front)", "Width (Side)", "Height"],
-            default_values=["l", "w", "h"],
-            custom_values=["5", "5", "10"],
-            custom_labels=["Length (Front)", "Width (Side)", "Height"],
-            features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True},
-            num_sides=4,
-            uses_base_side_flip=False,
-            rotation_labels=[],
-            has_dimension_mode=True,
-            help_text="Default: Clean shape, add labels with presets.\nCustom: Enter Length, Width, and Height."
-        )
-        _tri_prism_base = dict(
-            labels=["Base (Tri)", "Height (Tri)", "Length (Prism)", "Left Side", "Right Side"],
-            default_values=["b", "h", "l", "", ""],
-            custom_values=["5", "4", "6", "", ""],
-            custom_labels=["Base", "Height", "Length", "Left Side", "Right Side"],
-            features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True, ShapeFeature.SLIDER_PEAK: True},
-            has_dimension_mode=True,
-            help_text="Enter Base + Height OR Base + both Sides.\nCustom: Peak slider adjusts triangle apex."
-        )
-        cls._configs["Triangular Prism"] = ShapeConfig(
-            **_tri_prism_base,
-            num_sides=3,
-            rotation_labels=["Base Down", "Left Side Down", "Base Up"],
-        )
-        cls._configs["Tri Prism"] = ShapeConfig(
-            **_tri_prism_base,
-            num_sides=4,
-            uses_base_side_flip=False,
-            rotation_labels=["Base Down", "Left Side Down", "Base Up", "Right Side Down"],
-        )
-    
-    @classmethod
-    def _init_angle_shapes(cls) -> None:
-        cls._configs["Angle (Adjustable)"] = ShapeConfig(
-            labels=["Angle Label"],
-            default_values=["x°"],
-            features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True},
-            has_dimension_mode=False,
-            help_text="Adjustable angle. Slider controls angle size (5° to 350°)."
-        )
-        cls._configs["Parallel Lines & Transversal"] = ShapeConfig(
-            labels=["Top Left", "Top Right", "Bottom Left", "Bottom Right"],
-            default_values=["x°", "x°", "x°", "x°"],
-            features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True},
-            has_dimension_mode=False,
-            help_text="Parallel lines cut by transversal. Slider adjusts gap between parallel lines."
-        )
-        cls._configs["Complementary Angles"] = ShapeConfig(
-            labels=["Angle 1", "Angle 2"],
-            default_values=["x°", "x°"],
-            features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True},
-            has_dimension_mode=False,
-            help_text="Two angles that sum to 90°. Slider adjusts split between angles."
-        )
-        cls._configs["Supplementary Angles"] = ShapeConfig(
-            labels=["Left Angle", "Right Angle"],
-            default_values=["x°", "x°"],
-            features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True},
-            has_dimension_mode=False,
-            help_text="Two angles that sum to 180°. Slider adjusts split between angles."
-        )
-        cls._configs["Vertical Angles"] = ShapeConfig(
-            labels=["Top", "Bottom", "Left", "Right"],
-            default_values=["x°", "x°", "x°", "x°"],
-            features={ShapeFeature.SLIDER_SHAPE: True},
-            has_dimension_mode=False,
-            help_text="Opposite angles formed by two intersecting lines. Slider adjusts line angle."
-        )
-        cls._configs["Line Segment"] = ShapeConfig(
-            labels=["Point A", "Point B", "Point C", "Left Segment", "Right Segment"],
-            default_values=["A", "B", "C", "", ""],
-            features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True},
-            has_dimension_mode=False,
-            help_text="Line segment with three labeled points. Slider moves point B along segment."
-        )
-    
-    @classmethod
-    def _init_composite_shapes(cls) -> None:
-        cls._configs["2D Composite"] = ShapeConfig(
-            labels=[],
-            default_values=[],
-            features={},
-            has_dimension_mode=False,
-            help_text="Add 2D shapes using the transfer list, then they appear on the canvas."
-        )
-        cls._configs["3D Composite"] = ShapeConfig(
-            labels=[],
-            default_values=[],
-            features={},
-            has_dimension_mode=False,
-            help_text="Add 3D shapes using the transfer list, then they appear on the canvas."
-        )
-    
-    @classmethod
-    def get(cls, shape_name: str) -> ShapeConfig:
-        """Get configuration for a shape. Returns empty config if not found."""
-        cls._ensure_initialized()
-        return cls._configs.get(shape_name, ShapeConfig())
-    
-    @classmethod
-    def get_triangle_config(cls, triangle_type: str) -> ShapeConfig:
-        """Get configuration for a specific triangle type."""
-        cls._ensure_initialized()
-        key = f"Triangle_{triangle_type}"
-        if key in cls._configs:
-            return cls._configs[key]
-        return cls._configs.get("Triangle", ShapeConfig())
-    
-    @classmethod
-    def has_dimension_mode(cls, shape_name: str) -> bool:
-        """Check if shape supports dimension mode switching."""
-        return cls.get(shape_name).has_dimension_mode
-    
+def _build_shape_configs() -> dict[str, "ShapeConfig"]:
+    """Build and return the complete shape configuration mapping.
 
+    Called exactly once at module load — result stored in _SHAPE_CONFIGS.
+    ShapeConfigProvider delegates all lookups to that constant.
+    """
+    configs: dict[str, ShapeConfig] = {}
+
+    # ── 2D shapes ────────────────────────────────────────────────────────────
+    configs["Rectangle"] = ShapeConfig(
+        labels=["Top", "Bottom", "Left", "Right"],
+        default_values=["a", "a", "b", "b"],
+        custom_values=["10", "5"],
+        custom_labels=["Length", "Width"],
+        features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True},
+        num_sides=4,
+        has_dimension_mode=True,
+        help_text="Default: Clean shape, add labels with presets.\nCustom: Enter Length and Width values."
+    )
+    configs["Square"] = ShapeConfig(
+        labels=["Top", "Bottom", "Left", "Right"],
+        default_values=["a", "a", "a", "a"],
+        features={ShapeFeature.FLIP: False, ShapeFeature.ROTATE: False},
+        has_dimension_mode=False,
+        help_text="All sides equal. Labels only mode."
+    )
+    configs["Circle"] = ShapeConfig(
+        labels=["Radius", "Diameter", "Circumference"],
+        default_values=["r", "", ""],
+        features={ShapeFeature.FLIP: False, ShapeFeature.ROTATE: False},
+        has_dimension_mode=False,
+        help_text="Defined by radius or diameter. Leave unused fields blank."
+    )
+    configs["Parallelogram"] = ShapeConfig(
+        labels=["Top", "Bottom", "Left Side", "Right Side", "Height"],
+        default_values=["a", "a", "b", "b", "h"],
+        custom_values=["6", "4", ""],
+        custom_labels=["Length", "Height", "Side"],
+        features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.SLIDER_SLOPE: True, ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True},
+        num_sides=4,
+        has_dimension_mode=True,
+        help_text="Enter Length + Height, OR Length + Side.\nCustom: Slope slider adjusts lean."
+    )
+    configs["Trapezoid"] = ShapeConfig(
+        labels=["Top", "Bottom", "Left Leg", "Right Leg", "Height"],
+        default_values=["a", "b", "c", "d", "h"],
+        custom_values=["3", "6", "4", "", ""],
+        custom_labels=["Top Base", "Bottom Base", "Height", "Left Side", "Right Side"],
+        features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True},
+        num_sides=4,
+        has_dimension_mode=True,
+        help_text="Enter Top + Bottom + Height, OR Top + Bottom + both Sides.\nCustom: Numeric values control exact dimensions."
+    )
+    configs["Polygon"] = ShapeConfig(
+        labels=["Side Length"],
+        default_values=["a"],
+        features={ShapeFeature.HASH_MARKS: True},
+        has_dimension_mode=False,
+        help_text="Regular polygon. Choose Pentagon, Hexagon, or Octagon using the type buttons."
+    )
+    # Triangle configurations — base shared between Triangle and Tri Triangle
+    _tri_base = dict(
+        labels=["Base Width", "Height", "Left Label", "Right Label"],
+        default_values=["b", "h", "c", "a"],
+        features={ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True},
+        has_dimension_mode=False,
+    )
+    configs["Triangle"] = ShapeConfig(
+        **_tri_base,
+        num_sides=3,
+        help_text="Custom triangle defined by base and height."
+    )
+    configs["Tri Triangle"] = ShapeConfig(
+        **_tri_base,
+        num_sides=4,
+        uses_base_side_flip=False,
+        rotation_labels=["Base Down", "Left Side Down", "Base Up", "Right Side Down"],
+        help_text="Triangle (composite). Rotates in 90° steps."
+    )
+    configs["Triangle_Custom"] = ShapeConfig(
+        labels=["Base Width", "Height", "Left Side", "Right Side"],
+        default_values=["b", "h", "c", "a"],
+        custom_values=["5", "4", "", ""],
+        custom_labels=["Base Width", "Height", "Left Side", "Right Side"],
+        features={ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True},
+        num_sides=3,
+        has_dimension_mode=True,
+        help_text="Enter Base + Height OR Base + both Sides (mutually exclusive)."
+    )
+    configs["Triangle_Isosceles"] = ShapeConfig(
+        labels=["Base Label", "Left Label", "Right Label", "Height"],
+        default_values=["a", "b", "b", "h"],
+        features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True},
+        num_sides=3,
+        has_dimension_mode=False,
+        help_text="Isosceles triangle with two equal sides. Slider adjusts proportions."
+    )
+    configs["Triangle_Scalene"] = ShapeConfig(
+        labels=["Side A (Bottom)", "Side B (Left)", "Side C (Right)", "Height"],
+        default_values=["a", "b", "c", "h"],
+        features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True, ShapeFeature.SLIDER_PEAK: True},
+        num_sides=3,
+        has_dimension_mode=False,
+        help_text="Scalene triangle with all different sides. Sliders adjust shape proportions."
+    )
+    configs["Triangle_Equilateral"] = ShapeConfig(
+        labels=["Side A (Bottom)", "Side B (Left)", "Side C (Right)"],
+        default_values=["a", "a", "a"],
+        features={ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True},
+        num_sides=3,
+        has_dimension_mode=False,
+        help_text="Equilateral triangle with all equal sides."
+    )
+
+    # ── 3D shapes ────────────────────────────────────────────────────────────
+    configs["Sphere"] = ShapeConfig(
+        labels=["Radius", "Diameter", "Circumference"],
+        default_values=["r", "", ""],
+        has_dimension_mode=False,
+        help_text="Defined by radius or diameter. Slider adjusts scale."
+    )
+    configs["Hemisphere"] = ShapeConfig(
+        labels=["Radius", "Diameter", "Circumference"],
+        default_values=["r", "", ""],
+        features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True},
+        num_sides=4,
+        rotation_labels=[],
+        has_dimension_mode=False,
+        help_text="Defined by radius or diameter. Adjust Shape slider changes dome proportions (squat/tall)."
+    )
+    configs["Cylinder"] = ShapeConfig(
+        labels=["Radius", "Diameter", "Height", "Circumference"],
+        default_values=["r", "", "h", ""],
+        custom_values=["5", "", "5"],
+        custom_labels=["Radius", "Diameter", "Height"],
+        features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: False, ShapeFeature.ROTATE: True},
+        num_sides=4,
+        rotation_labels=[],
+        has_dimension_mode=True,
+        help_text="Default: Clean shape, add labels with presets.\nCustom: Enter Radius or Diameter + Height."
+    )
+    configs["Cone"] = ShapeConfig(
+        labels=["Radius", "Diameter", "Height", "Circumference"],
+        default_values=["r", "", "h", ""],
+        custom_values=["4", "", "9"],
+        custom_labels=["Radius", "Diameter", "Height"],
+        features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True},
+        num_sides=4,
+        rotation_labels=[],
+        has_dimension_mode=True,
+        help_text="Default: Clean shape, add labels with presets.\nCustom: Enter Radius or Diameter + Height."
+    )
+    configs["Rectangular Prism"] = ShapeConfig(
+        labels=["Length (Front)", "Width (Side)", "Height"],
+        default_values=["l", "w", "h"],
+        custom_values=["5", "5", "10"],
+        custom_labels=["Length (Front)", "Width (Side)", "Height"],
+        features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True},
+        num_sides=4,
+        uses_base_side_flip=False,
+        rotation_labels=[],
+        has_dimension_mode=True,
+        help_text="Default: Clean shape, add labels with presets.\nCustom: Enter Length, Width, and Height."
+    )
+    _tri_prism_base = dict(
+        labels=["Base (Tri)", "Height (Tri)", "Length (Prism)", "Left Side", "Right Side"],
+        default_values=["b", "h", "l", "", ""],
+        custom_values=["5", "4", "6", "", ""],
+        custom_labels=["Base", "Height", "Length", "Left Side", "Right Side"],
+        features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True, ShapeFeature.SLIDER_PEAK: True},
+        has_dimension_mode=True,
+        help_text="Enter Base + Height OR Base + both Sides.\nCustom: Peak slider adjusts triangle apex."
+    )
+    configs["Triangular Prism"] = ShapeConfig(
+        **_tri_prism_base,
+        num_sides=3,
+        rotation_labels=["Base Down", "Left Side Down", "Base Up"],
+    )
+    configs["Tri Prism"] = ShapeConfig(
+        **_tri_prism_base,
+        num_sides=4,
+        uses_base_side_flip=False,
+        rotation_labels=["Base Down", "Left Side Down", "Base Up", "Right Side Down"],
+    )
+
+    # ── Angle / line shapes ──────────────────────────────────────────────────
+    configs["Angle (Adjustable)"] = ShapeConfig(
+        labels=["Angle Label"],
+        default_values=["x°"],
+        features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True},
+        has_dimension_mode=False,
+        help_text="Adjustable angle. Slider controls angle size (5° to 350°)."
+    )
+    configs["Parallel Lines & Transversal"] = ShapeConfig(
+        labels=["Top Left", "Top Right", "Bottom Left", "Bottom Right"],
+        default_values=["x°", "x°", "x°", "x°"],
+        features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True},
+        has_dimension_mode=False,
+        help_text="Parallel lines cut by transversal. Slider adjusts gap between parallel lines."
+    )
+    configs["Complementary Angles"] = ShapeConfig(
+        labels=["Angle 1", "Angle 2"],
+        default_values=["x°", "x°"],
+        features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True},
+        has_dimension_mode=False,
+        help_text="Two angles that sum to 90°. Slider adjusts split between angles."
+    )
+    configs["Supplementary Angles"] = ShapeConfig(
+        labels=["Left Angle", "Right Angle"],
+        default_values=["x°", "x°"],
+        features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True},
+        has_dimension_mode=False,
+        help_text="Two angles that sum to 180°. Slider adjusts split between angles."
+    )
+    configs["Vertical Angles"] = ShapeConfig(
+        labels=["Top", "Bottom", "Left", "Right"],
+        default_values=["x°", "x°", "x°", "x°"],
+        features={ShapeFeature.SLIDER_SHAPE: True},
+        has_dimension_mode=False,
+        help_text="Opposite angles formed by two intersecting lines. Slider adjusts line angle."
+    )
+    configs["Line Segment"] = ShapeConfig(
+        labels=["Point A", "Point B", "Point C", "Left Segment", "Right Segment"],
+        default_values=["A", "B", "C", "", ""],
+        features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True},
+        has_dimension_mode=False,
+        help_text="Line segment with three labeled points. Slider moves point B along segment."
+    )
+
+    # ── Composite shapes ─────────────────────────────────────────────────────
+    configs["2D Composite"] = ShapeConfig(
+        labels=[],
+        default_values=[],
+        features={},
+        has_dimension_mode=False,
+        help_text="Add 2D shapes using the transfer list, then they appear on the canvas."
+    )
+    configs["3D Composite"] = ShapeConfig(
+        labels=[],
+        default_values=[],
+        features={},
+        has_dimension_mode=False,
+        help_text="Add 3D shapes using the transfer list, then they appear on the canvas."
+    )
+
+    return configs
+
+
+# Module-level constant — built once at import time, never mutated.
+_SHAPE_CONFIGS: dict[str, "ShapeConfig"] = _build_shape_configs()
+
+
+class ShapeConfigProvider:
+    """Read-only access to shape configurations.
+
+    All configs are built once into the module-level _SHAPE_CONFIGS constant.
+    This class is a thin lookup façade — it holds no mutable state.
+    """
+
+    @staticmethod
+    def get(shape_name: str) -> "ShapeConfig":
+        """Return config for *shape_name*. Returns empty ShapeConfig if not found."""
+        return _SHAPE_CONFIGS.get(shape_name, ShapeConfig())
+
+    @staticmethod
+    def get_triangle_config(triangle_type: str) -> "ShapeConfig":
+        """Return config for a specific triangle sub-type."""
+        key = f"Triangle_{triangle_type}"
+        if key in _SHAPE_CONFIGS:
+            return _SHAPE_CONFIGS[key]
+        return _SHAPE_CONFIGS.get("Triangle", ShapeConfig())
+
+    @staticmethod
+    def has_dimension_mode(shape_name: str) -> bool:
+        """Return True if *shape_name* supports dimension-mode switching."""
+        return ShapeConfigProvider.get(shape_name).has_dimension_mode
 
 class GeometricRotation:
     """Computes geometric transforms for annotation tracking during rotation.
@@ -1175,11 +1171,13 @@ class GeometricRotation:
                     artist.set_position(cls.rotate_point(px, py, angle_rad, cx, cy))
                 
                 elif cls_name == 'FancyArrowPatch':
+                    if artist._posA_posB is None:
+                        continue
                     posA, posB = artist._posA_posB
-                    artist._posA_posB = [
+                    artist.set_positions(
                         cls.rotate_point(posA[0], posA[1], angle_rad, cx, cy),
                         cls.rotate_point(posB[0], posB[1], angle_rad, cx, cy),
-                    ]
+                    )
                 
                 elif cls_name == 'FancyBboxPatch':
                     # Text bbox backgrounds — they follow their parent Text
@@ -1261,11 +1259,11 @@ class GeometricRotation:
                 artist.set_position(rp(px, py))
 
             elif cls_name == 'FancyArrowPatch':
-                posA, posB = artist._posA_posB
-                artist._posA_posB = [
-                    rp(posA[0], posA[1]),
-                    rp(posB[0], posB[1]),
-                ]
+                if artist._posA_posB is None:
+                    pass
+                else:
+                    posA, posB = artist._posA_posB
+                    artist.set_positions(rp(posA[0], posA[1]), rp(posB[0], posB[1]))
         except Exception:
             logger.debug("Could not transform artist %s", cls_name)
 
@@ -1438,11 +1436,13 @@ class GeometricRotation:
                     artist.set_position(mirror(px, py))
 
                 elif cls_name == 'FancyArrowPatch':
+                    if artist._posA_posB is None:
+                        continue
                     posA, posB = artist._posA_posB
-                    artist._posA_posB = [
+                    artist.set_positions(
                         mirror(posA[0], posA[1]),
                         mirror(posB[0], posB[1]),
-                    ]
+                    )
 
                 elif cls_name in ('FancyBboxPatch', 'Rectangle'):
                     pass  # follow parent Text / skip background
@@ -11081,17 +11081,17 @@ if __name__ == "__main__":
 
 
 # ================== REFACTOR SESSION NOTES =============================
-# Last completed: Batch 5 (Set and State Consolidation) — all tests passed.
-# Versioning moved to Git — no version numbers in source.
+# Last completed: Batch 6 (Architecture — partial) — all tests passed.
 
-# Batch 6 — Architecture (highest risk, multi-session — do last)
-#   [6a] Extract CompositeDragController from GeometryApp: move all
-#        _on_composite_press/motion/release logic, _composite_dim_lines,
-#        _composite_bboxes, and related state into a dedicated class.
-#   [6b] Extract StandaloneAnnotationController from GeometryApp: same treatment
-#        for _standalone_labels, _standalone_dim_lines, and their mouse handlers.
-#   [6c] Convert ShapeConfigProvider class-level mutable _configs dict to a
-#        module-level constant (initialized once, never mutated after startup).
-#   [6d] Audit GeometricRotation.rotate_axes_artists / flip_axes_artists for
-#        matplotlib private API access (_posA_posB, _path, etc.) and replace
-#        with supported public equivalents where available.
+# REMAINING BATCHES
+# -----------------
+#
+# Batch 6 — Architecture (partial)
+#   - [6a] DEFERRED — CompositeDragController extraction. 282 references across
+#     GeometryApp; composite drag methods are deeply entangled with generate_plot,
+#     history_manager, shape_var, canvas, label_manager, and _shape_bounds.
+#     Extraction requires a dedicated multi-session pass to avoid breaking
+#     composite mode. Scope is too large to bundle safely with 6c/6d.
+#   - [6b] DEFERRED — StandaloneAnnotationController extraction. Same reason as
+#     6a; standalone handlers share state with GeometryApp. Smaller scope (64
+#     refs) but risk profile is identical. Defer to same dedicated session as 6a.
