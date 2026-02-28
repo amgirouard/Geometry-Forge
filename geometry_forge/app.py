@@ -106,6 +106,7 @@ class GeometryApp:
         # __init__ only captures a reference to self (app).
         # Accessed as self.standalone_ctrl; backward-compat delegates kept below.
         self._shape_bounds: dict | None = None
+        self._composite_geometry_hints: dict[int, dict] = {}
         self._standalone_event_ids: list[int] = []
         self._composite_event_ids: list[int] = []
         self._label_drag_state: dict | None = None
@@ -174,6 +175,8 @@ class GeometryApp:
         self._composite_label_bboxes = []
         self._composite_dim_endpoints = []
         self._composite_dim_lines = []
+        self._composite_preset_frame = None
+        self._composite_preset_defs = {}
         self._standalone_label_entry = None
         self._standalone_text_btn = None
         self._standalone_cancel_btn = None
@@ -333,6 +336,71 @@ class GeometryApp:
 
     def _start_dim_line_mode(self, mode: str) -> None:
         self.composite_ctrl.start_dim_mode(mode)
+
+    def _add_composite_preset_dim(self, preset_key: str, default_text: str) -> None:
+        """Add a preset dimension line to the selected composite shape."""
+        ctrl = self.composite_ctrl
+        text = default_text
+        if self._composite_label_entry is not None:
+            entry_text = self._composite_label_entry.get().strip()
+            if entry_text:
+                text = entry_text
+                self._composite_label_entry.delete(0, tk.END)
+
+        if len(ctrl.selected) != 1:
+            ctrl.start_dim_mode("free")
+            return
+
+        sel_idx = next(iter(ctrl.selected))
+        if sel_idx >= len(self._composite_bboxes):
+            ctrl.start_dim_mode("free")
+            return
+        bbox = self._composite_bboxes[sel_idx]
+        if bbox == (0, 0, 0, 0):
+            ctrl.start_dim_mode("free")
+            return
+
+        x_min, y_min, x_max, y_max = bbox
+        saved_bounds = self._shape_bounds
+        saved_hints = dict(self.label_manager.geometry_hints)
+        saved_xlim = self.ax.get_xlim()
+        saved_ylim = self.ax.get_ylim()
+
+        try:
+            self._shape_bounds = {"x_min": x_min, "x_max": x_max, "y_min": y_min, "y_max": y_max}
+            shape_hints = self._composite_geometry_hints.get(sel_idx, {})
+            self.label_manager.geometry_hints.clear()
+            self.label_manager.geometry_hints.update(shape_hints)
+            pad = max((x_max - x_min), (y_max - y_min)) * 0.15 or 0.5
+            self.ax.set_xlim(x_min - pad, x_max + pad)
+            self.ax.set_ylim(y_min - pad, y_max + pad)
+            endpoints = self._calc_dim_line_endpoints(preset_key)
+        finally:
+            self._shape_bounds = saved_bounds
+            self.label_manager.geometry_hints.clear()
+            self.label_manager.geometry_hints.update(saved_hints)
+            self.ax.set_xlim(*saved_xlim)
+            self.ax.set_ylim(*saved_ylim)
+
+        if endpoints is None:
+            ctrl.start_dim_mode("free")
+            return
+
+        ctrl.dim_lines.append({
+            "x1": endpoints["x1"], "y1": endpoints["y1"],
+            "x2": endpoints["x2"], "y2": endpoints["y2"],
+            "text": text,
+            "constraint": endpoints.get("constraint"),
+            "label_x": endpoints["label_x"],
+            "label_y": endpoints["label_y"],
+            "shape_owner": sel_idx,  # tied to this shape; free lines have no owner
+        })
+        ctrl.selected_dim = len(ctrl.dim_lines) - 1
+        ctrl.selected_label = None
+        self.generate_plot()
+        if not self.history_manager.is_restoring:
+            self._capture_current_state()
+
 
     def _cancel_dim_line_mode(self) -> None:
         self.composite_ctrl.cancel_dim_mode()
@@ -1233,7 +1301,7 @@ class GeometryApp:
     
     def _update_dimension_mode_buttons(self) -> None:
         # Guard against button not existing (shapes without dimension mode)
-        if not hasattr(self, 'default_btn') or not self.default_btn.winfo_exists():
+        if not hasattr(self, 'default_btn') or self.default_btn is None or not self.default_btn.winfo_exists():
             return
         
         mode = self.dimension_mode_var.get()
@@ -2358,6 +2426,43 @@ class GeometryApp:
             self._standalone_free_btn.grid_remove()
             self._standalone_cancel_dim_btn.grid()
 
+    def _rebuild_composite_preset_buttons(self) -> None:
+        """Rebuild the Presets button grid based on the currently selected shape."""
+        frame = getattr(self, '_composite_preset_frame', None)
+        if frame is None:
+            return
+        preset_defs = getattr(self, '_composite_preset_defs', {})
+        for w in frame.winfo_children():
+            w.destroy()
+        ctrl = self.composite_ctrl
+        if len(ctrl.selected) != 1:
+            tk.Label(frame, text="(select one shape)", bg=AppConstants.BG_COLOR,
+                     font=("Arial", 8, "italic"), fg="#888888").pack(side=tk.TOP, anchor="w", padx=4)
+            return
+        sel_idx = next(iter(ctrl.selected))
+        selected_shapes = (self.composite_transfer.get_selected_shapes()
+                           if self.composite_transfer is not None else [])
+        if sel_idx >= len(selected_shapes):
+            tk.Label(frame, text="(select one shape)", bg=AppConstants.BG_COLOR,
+                     font=("Arial", 8, "italic"), fg="#888888").pack(side=tk.TOP, anchor="w", padx=4)
+            return
+        shape_name = selected_shapes[sel_idx]
+        presets = preset_defs.get(shape_name, [])
+        if not presets:
+            tk.Label(frame, text=f"(no presets for {shape_name})", bg=AppConstants.BG_COLOR,
+                     font=("Arial", 8, "italic"), fg="#888888").pack(side=tk.TOP, anchor="w", padx=4)
+            return
+        btn_grid = tk.Frame(frame, bg=AppConstants.BG_COLOR)
+        btn_grid.pack(side=tk.TOP, fill=tk.X)
+        btn_grid.columnconfigure(0, weight=1)
+        btn_grid.columnconfigure(1, weight=1)
+        for i, p in enumerate(presets):
+            tk.Button(btn_grid, text=p["label"], font=AppConstants.BTN_FONT,
+                      pady=0, bd=1,
+                      command=lambda k=p["key"], t=p["default_text"]:
+                          self._add_composite_preset_dim(k, t)
+                      ).grid(row=i // 2, column=i % 2, padx=1, pady=1, sticky="ew")
+
     def _build_composite_ui(self, shape: str) -> None:
         """Build the transfer list UI for composite shapes."""
         if shape == "2D Composite":
@@ -2404,21 +2509,61 @@ class GeometryApp:
                                                pady=0, bd=1, command=self._cancel_composite_edit)
         # Hidden by default — shown only during edit mode
 
-        # 2-column preset grid  (Height | Width  /  Radius | + Line)
-        btn_grid = tk.Frame(self.col_dimlines, bg=AppConstants.BG_COLOR)
-        btn_grid.pack(side=tk.TOP, fill=tk.X)
-        btn_grid.columnconfigure(0, weight=1)
-        btn_grid.columnconfigure(1, weight=1)
-
-        presets = [("Height", "height"), ("Width", "width"), ("Radius", "radius")]
-        for i, (label, key) in enumerate(presets):
-            tk.Button(btn_grid, text=label, font=AppConstants.BTN_FONT,
-                      pady=0, bd=1, command=lambda k=key: self._start_dim_line_mode(k)
-                      ).grid(row=i // 2, column=i % 2, padx=1, pady=1, sticky="ew")
-
-        tk.Button(btn_grid, text="+ Line", font=AppConstants.BTN_FONT,
+        # ── Manual line buttons: Vertical | Horizontal | + Line ──────────
+        manual_grid = tk.Frame(self.col_dimlines, bg=AppConstants.BG_COLOR)
+        manual_grid.pack(side=tk.TOP, fill=tk.X)
+        manual_grid.columnconfigure(0, weight=1)
+        manual_grid.columnconfigure(1, weight=1)
+        tk.Button(manual_grid, text="Vertical", font=AppConstants.BTN_FONT,
+                  pady=0, bd=1, command=lambda: self._start_dim_line_mode("height")
+                  ).grid(row=0, column=0, padx=1, pady=1, sticky="ew")
+        tk.Button(manual_grid, text="Horizontal", font=AppConstants.BTN_FONT,
+                  pady=0, bd=1, command=lambda: self._start_dim_line_mode("width")
+                  ).grid(row=0, column=1, padx=1, pady=1, sticky="ew")
+        tk.Button(manual_grid, text="+ Line", font=AppConstants.BTN_FONT,
                   pady=0, bd=1, command=lambda: self._start_dim_line_mode("free")
-                  ).grid(row=1, column=1, padx=1, pady=1, sticky="ew")
+                  ).grid(row=1, column=0, columnspan=2, padx=1, pady=1, sticky="ew")
+
+        # ── Presets section ───────────────────────────────────────────────
+        tk.Label(self.col_dimlines, text="Presets", bg=AppConstants.BG_COLOR,
+                 font=("Arial", 8, "bold")).pack(side=tk.TOP, anchor="w", pady=(4, 0), padx=2)
+
+        self._composite_preset_defs = {
+            "Rectangle":         [{"key": "height",      "label": "Width",    "default_text": "w"},
+                                   {"key": "width",       "label": "Length",   "default_text": "l"}],
+            "Square":            [{"key": "side_v",      "label": "Side V",   "default_text": "s"},
+                                   {"key": "side_h",      "label": "Side H",   "default_text": "s"}],
+            "Tri Triangle":      [{"key": "height",      "label": "Height",   "default_text": "h"},
+                                   {"key": "width",       "label": "Base",     "default_text": "b"},
+                                   {"key": "side_l",      "label": "Side L",   "default_text": "l"},
+                                   {"key": "side_r",      "label": "Side R",   "default_text": "r"}],
+            "Parallelogram":     [{"key": "para_height", "label": "Height",   "default_text": "h"},
+                                   {"key": "para_base",   "label": "Base",     "default_text": "b"},
+                                   {"key": "para_top",    "label": "Top",      "default_text": "t"},
+                                   {"key": "para_side_l", "label": "Side L",   "default_text": "l"},
+                                   {"key": "para_side_r", "label": "Side R",   "default_text": "r"}],
+            "Trapezoid":         [{"key": "trap_height", "label": "Height",   "default_text": "h"},
+                                   {"key": "trap_base",   "label": "Base",     "default_text": "b"},
+                                   {"key": "trap_top",    "label": "Top",      "default_text": "t"},
+                                   {"key": "trap_side_l", "label": "Side L",   "default_text": "l"},
+                                   {"key": "trap_side_r", "label": "Side R",   "default_text": "r"}],
+            "Polygon":           [{"key": "side",        "label": "Side",     "default_text": "s"}],
+            "Rectangular Prism": [{"key": "height",      "label": "Height",   "default_text": "h"},
+                                   {"key": "length",      "label": "Length",   "default_text": "l"},
+                                   {"key": "width",       "label": "Width",    "default_text": "w"}],
+            "Triangular Prism":  [{"key": "height",      "label": "Height",   "default_text": "h"},
+                                   {"key": "tri_base",    "label": "Base",     "default_text": "b"},
+                                   {"key": "tri_length",  "label": "Length",   "default_text": "l"}],
+            "Tri Prism":         [{"key": "height",      "label": "Height",   "default_text": "h"},
+                                   {"key": "tri_base",    "label": "Base",     "default_text": "b"},
+                                   {"key": "tri_length",  "label": "Length",   "default_text": "l"}],
+        }
+
+        preset_outer = tk.Frame(self.col_dimlines, bg=AppConstants.BG_COLOR)
+        preset_outer.pack(side=tk.TOP, fill=tk.X)
+        self._composite_preset_frame = preset_outer
+        tk.Label(preset_outer, text="(select one shape)", bg=AppConstants.BG_COLOR,
+                 font=("Arial", 8, "italic"), fg="#888888").pack(side=tk.TOP, anchor="w", padx=4)
 
         # Status label for dim-line placement feedback
         self._dim_status_label = tk.Label(self.col_dimlines, text="", bg=AppConstants.BG_COLOR,
@@ -2495,6 +2640,7 @@ class GeometryApp:
         
         # Phase 1: Draw each shape at origin, capture its artists and bounds
         shape_data_list = []
+        self._composite_geometry_hints = {}
         
         for i, shape_name in enumerate(selected_shapes):
             patches_before = len(self.ax.patches)
@@ -2661,6 +2807,8 @@ class GeometryApp:
                     shape_xlim = tuple(_post_draw_xlim)
                     shape_ylim = tuple(_post_draw_ylim)
 
+                self._composite_geometry_hints[i] = dict(self.label_manager.geometry_hints)
+
                 shape_data_list.append({
                     "name": shape_name,
                     "error": False,
@@ -2762,6 +2910,22 @@ class GeometryApp:
             # Translate snap anchors
             translated_anchors = [(ax + dx, ay + dy) for ax, ay in sdata.get("snap_anchors", [])]
             self._composite_snap_anchors.append(translated_anchors)
+
+            _POINT_KEYS = {"tri_foot","tri_apex","tri_base_p1","tri_base_p2",
+                "prism_f_bl","prism_f_br","prism_f_tl","prism_f_tr",
+                "prism_b_bl","prism_b_br","prism_b_tl","prism_b_tr"}
+            _LIST_KEYS = {"rect_pts","tri_pts","para_pts","trap_pts","polygon_pts"}
+            if i in self._composite_geometry_hints:
+                th = {}
+                for k, v in self._composite_geometry_hints[i].items():
+                    if k in _POINT_KEYS and isinstance(v,(tuple,list)) and len(v)==2:
+                        th[k] = (v[0]+dx, v[1]+dy)
+                    elif k in _LIST_KEYS and isinstance(v,list):
+                        th[k] = [(p[0]+dx,p[1]+dy) for p in v]
+                    elif k in ("height_y1","height_y2"): th[k] = v+dy
+                    elif k == "height_x": th[k] = v+dx
+                    else: th[k] = v
+                self._composite_geometry_hints[i] = th
         
         # Draw selection highlight around all selected shapes
         for sel_idx in self._composite_selected:
@@ -3041,7 +3205,7 @@ class GeometryApp:
         b = self._shape_bounds
         hints  = self.label_manager.geometry_hints
         offset = DrawingUtilities.dim_offset_from_axes(self.ax)
-        label_gap = DrawingUtilities.dim_label_gap_from_axes(self.ax)
+        label_gap = DrawingUtilities.dim_offset_from_axes(self.ax, px=AppConstants.PRESET_DIM_OFFSET_PX * 0.5)
 
         # Build dispatch table once per instance on first call.
         # Safe to cache permanently: all values are bound methods on `self`,
@@ -3986,14 +4150,46 @@ class GeometryApp:
             pixel_aspect = self._axes_pixel_aspect
             page_h = 20.0
             page_w = page_h * pixel_aspect
-            self.ax.set_xlim(0, page_w)
-            self.ax.set_ylim(0, page_h)
-            self.ax.text(
-                0.5, 0.5,
-                "Add shapes from the Available list\nusing the → button",
-                ha="center", va="center", fontsize=14, color="gray",
-                transform=self.ax.transAxes,
-            )
+            # Check for free (unowned) dim lines that should remain visible
+            free_dims = [d for d in self._composite_dim_lines
+                         if d.get("shape_owner") is None]
+            if free_dims:
+                # Expand view to include all free line coordinates
+                all_x = [d["x1"] for d in free_dims] + [d["x2"] for d in free_dims]
+                all_y = [d["y1"] for d in free_dims] + [d["y2"] for d in free_dims]
+                pad = max(page_w, page_h) * 0.1
+                self.ax.set_xlim(min(all_x) - pad, max(all_x) + pad)
+                self.ax.set_ylim(min(all_y) - pad, max(all_y) + pad)
+                font_size = self.font_size_var.get() if self.font_size_var is not None else 12
+                for i, dim in enumerate(self._composite_dim_lines):
+                    if dim.get("shape_owner") is not None:
+                        continue
+                    is_sel = (i == self._composite_selected_dim)
+                    color = "#0066cc" if is_sel else "black"
+                    lw = 1.5 if is_sel else AppConstants.DIMENSION_LINE_WIDTH
+                    x1, y1, x2, y2 = dim["x1"], dim["y1"], dim["x2"], dim["y2"]
+                    self.ax.plot([x1, x2], [y1, y2],
+                                 color=color, linestyle="--", linewidth=lw, zorder=12)
+                    for px, py in [(x1, y1), (x2, y2)]:
+                        self.ax.plot(px, py, marker="o",
+                                     markersize=4 if is_sel else 3, color=color, zorder=13)
+                    lx = dim.get("label_x", (x1 + x2) / 2)
+                    ly = dim.get("label_y", (y1 + y2) / 2)
+                    self.ax.text(lx, ly, dim["text"], fontsize=font_size, color=color,
+                                 fontweight="bold" if is_sel else "normal",
+                                 fontfamily=getattr(self, 'font_family', AppConstants.DEFAULT_FONT_FAMILY),
+                                 ha="center", va="center", zorder=AppConstants.LABEL_ZORDER + 1,
+                                 bbox=dict(boxstyle="round,pad=0.2", facecolor="white",
+                                           edgecolor=color if is_sel else "none", alpha=1))
+            else:
+                self.ax.set_xlim(0, page_w)
+                self.ax.set_ylim(0, page_h)
+                self.ax.text(
+                    0.5, 0.5,
+                    "Add shapes from the Available list\nusing the → button",
+                    ha="center", va="center", fontsize=14, color="gray",
+                    transform=self.ax.transAxes,
+                )
             self.plot_controller.refresh()
             return
         self._draw_composite_shapes(selected)

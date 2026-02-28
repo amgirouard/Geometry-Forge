@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import logging
 import tkinter as tk
+import numpy as np
 import matplotlib.patches as patches
 
 from .models import (
@@ -705,6 +706,9 @@ class CompositeDragController:
                 last = max(self.selected)
                 if last < dest.size():
                     dest.see(last)
+        # Rebuild the Presets button panel to match the current selection
+        if hasattr(app, '_rebuild_composite_preset_buttons'):
+            app._rebuild_composite_preset_buttons()
 
     def get_group_center(self) -> tuple[float, float]:
         """Calculate the center of all selected shapes' bounding boxes."""
@@ -1232,6 +1236,13 @@ class CompositeDragController:
                     tfm_b = self.transforms.get(swap_b, {"flip_h": False, "flip_v": False, "base_side": 0})
                     self.transforms[swap_a] = tfm_b
                     self.transforms[swap_b] = tfm_a
+                    # Keep shape_owner in sync when shapes are reordered
+                    for dim in self.dim_lines:
+                        owner = dim.get("shape_owner")
+                        if owner == swap_a:
+                            dim["shape_owner"] = swap_b
+                        elif owner == swap_b:
+                            dim["shape_owner"] = swap_a
 
                 elif op_type == "remove":
                     removed_idx = operation[1]
@@ -1249,6 +1260,19 @@ class CompositeDragController:
                             new_transforms[k - 1] = v
                     self.positions = new_positions
                     self.transforms = new_transforms
+                    # Remove owned dim lines; reindex survivors
+                    new_dim_lines = []
+                    for dim in self.dim_lines:
+                        owner = dim.get("shape_owner")
+                        if owner == removed_idx:
+                            continue
+                        if owner is not None and owner > removed_idx:
+                            dim = dict(dim)
+                            dim["shape_owner"] = owner - 1
+                        new_dim_lines.append(dim)
+                    self.dim_lines = new_dim_lines
+                    if self.selected_dim is not None and self.selected_dim >= len(self.dim_lines):
+                        self.selected_dim = None
 
                 elif op_type == "add":
                     new_idx = operation[1]
@@ -1311,6 +1335,24 @@ class CompositeDragController:
                 self.positions = new_positions
                 self.transforms = new_transforms
 
+                # Remove dim lines owned by deleted shape; reindex survivors
+                new_dim_lines = []
+                for dim in self.dim_lines:
+                    owner = dim.get("shape_owner")
+                    if owner == idx:
+                        continue
+                    if owner is not None and owner > idx:
+                        dim = dict(dim)
+                        dim["shape_owner"] = owner - 1
+                    new_dim_lines.append(dim)
+                self.dim_lines = new_dim_lines
+                if self.selected_dim is not None and self.selected_dim >= len(self.dim_lines):
+                    self.selected_dim = None
+
+        # Force grid re-layout so next added shape lands in its own cell
+        self.positions.clear()
+        app._composite_view_limits = None
+
         self.selected.clear()
 
         self.update_selection_ui()
@@ -1334,7 +1376,3 @@ class CompositeDragController:
         self.drag_state = None
         self.marquee = None
         self.snap_guides = []
-
-
-
-
