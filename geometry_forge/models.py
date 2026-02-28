@@ -62,7 +62,7 @@ class AppConstants:
     MIN_FONT_SIZE: int = 6
     MAX_FONT_SIZE: int = 48
     DEFAULT_FONT_FAMILY: str = "serif"
-    BTN_FONT: tuple = ("Arial", 13)   # Standard button font — apply to all tk.Button widgets for consistency
+    BTN_FONT: tuple = ("Arial", 10)   # Standard button font — apply to all tk.Button widgets for consistency
     
     SLIDER_MIN: float = 0.1
     SLIDER_MAX: float = 1.9
@@ -161,7 +161,14 @@ class AppConstants:
     SNAP_LINE_ALPHA: float = 0.6
     
     # Canvas layout
-    PAPER_ASPECT_RATIO: float = 4.0 / 3.0  # Canvas drawing area aspect ratio
+    PAPER_ASPECT_RATIO: float = 4.0 / 3.0  # Canvas drawing area aspect ratio (4:3)
+
+    # Window layout — all heights in pixels; width is determined at runtime by
+    # the menu bar's natural rendered width and never hardcoded.
+    CONTROLS_HEIGHT: int = 130            # Fixed height for controls row (sized for triangle — tallest shape)
+    TOP_BAR_HEIGHT: int = 46              # Category/Shape/Font selector bar
+    SHORTCUT_BAR_HEIGHT: int = 24         # Keyboard shortcut hint bar
+    CANVAS_PAPER_MARGIN: float = 0.03    # Grey border around white paper (fraction of figure)
 
     # All built-in dimension label keys that support selection, drag, and double-click edit.
     # Used in _on_canvas_press to distinguish built-in labels from freeform annotations.
@@ -610,4 +617,3 @@ class ShapeConfigProvider:
     def has_dimension_mode(shape_name: str) -> bool:
         """Return True if *shape_name* supports dimension-mode switching."""
         return ShapeConfigProvider.get(shape_name).has_dimension_mode
-

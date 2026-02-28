@@ -36,6 +36,37 @@ from .standalone_controller import StandaloneAnnotationController
 logger = logging.getLogger(__name__)
 
 
+
+class _Tooltip:
+    """Simple hover tooltip for any Tkinter widget."""
+    def __init__(self, widget: tk.Widget, text: str) -> None:
+        self._widget = widget
+        self._text = text
+        self._tip: tk.Toplevel | None = None
+        widget.bind("<Enter>", self._show, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<ButtonPress>", self._hide, add="+")
+
+    def _show(self, event=None) -> None:
+        if self._tip or not self._text:
+            return
+        x = self._widget.winfo_rootx() + 10
+        y = self._widget.winfo_rooty() + self._widget.winfo_height() + 4
+        self._tip = tk.Toplevel(self._widget)
+        self._tip.wm_overrideredirect(True)
+        self._tip.wm_geometry(f"+{x}+{y}")
+        tk.Label(
+            self._tip, text=self._text, justify="left",
+            bg="#ffffe0", relief="solid", borderwidth=1,
+            font=("Arial", 10), padx=4, pady=2
+        ).pack()
+
+    def _hide(self, event=None) -> None:
+        if self._tip:
+            self._tip.destroy()
+            self._tip = None
+
+
 class GeometryApp:
     """Main application class for Geometry Forge."""
 
@@ -524,15 +555,31 @@ class GeometryApp:
         }
 
     def _setup_layout(self) -> None:
-        """Build layout: top bar, 5-column controls row, full-width canvas, shortcut bar.
+        """Build layout: top bar, fixed-height controls row, canvas, shortcut bar.
         
-        Window width is determined by the controls row content.
-        Canvas uses 4:3 aspect ratio which determines window height.
+        Width is determined at runtime from the menu bar's natural rendered width.
+        Canvas height = width × 3/4 (4:3 ratio). All row heights are fixed constants.
         """
-        # Root grid: top bar, controls, canvas, shortcut bar
+        # Use a temporary estimate for canvas size — will be corrected to the
+        # real menu bar width at the end of _setup_canvas_and_controllers.
+        canvas_w = 760   # temporary placeholder; overwritten after menu bar is measured
+        canvas_h = int(canvas_w * 3 / 4)  # 4:3 ratio
+
+        self._canvas_target_w = canvas_w
+        self._canvas_target_h = canvas_h
+
+        # Apply size-10 font globally to all ttk widgets and unlabelled tk widgets
+        _style = ttk.Style()
+        _style.configure(".", font=("Arial", 10))
+        _style.configure("TCombobox", font=("Arial", 10))
+        _style.configure("TSpinbox", font=("Arial", 10))
+        _style.configure("TEntry", font=("Arial", 10))
+        self.root.option_add("*Font", ("Arial", 10))
+
+        # Root grid: 4 rows, 1 column
         self.root.rowconfigure(0, weight=0)  # top bar
         self.root.rowconfigure(1, weight=0)  # controls row (fixed height)
-        self.root.rowconfigure(2, weight=1)  # canvas (fills remaining)
+        self.root.rowconfigure(2, weight=0)  # canvas (fixed size)
         self.root.rowconfigure(3, weight=0)  # shortcut bar
         self.root.columnconfigure(0, weight=1)
         
@@ -541,128 +588,105 @@ class GeometryApp:
         self._create_canvas_area()
         self._create_shortcut_bar()
     
-    def _size_window_to_content(self) -> None:
-        """Calculate window size: top bar (all buttons visible) sets width, canvas is 4:3."""
-        # Temporarily show Save/Copy so they're included in width measurement
-        self.save_btn.grid(row=0, column=10, padx=1, sticky="e")
-        self.copy_btn.grid(row=0, column=11, padx=1, sticky="e")
-        self.root.update_idletasks()
-        
-        # Measure top bar with all buttons visible
-        top_width = self.center_container.winfo_reqwidth() + 20
-        controls_width = self.controls_row.winfo_reqwidth() + 20 if self.controls_row is not None else 0
-        app_width = max(top_width, controls_width)
-        
-        # Hide Save/Copy again (show_welcome will control visibility)
-        self.save_btn.grid_remove()
-        self.copy_btn.grid_remove()
-        
-        # Canvas fills the full app width, 4:3 ratio sets height
-        canvas_w = app_width
-        canvas_h = int(canvas_w * 3 / 4)
-        
-        # Total height
-        self.root.update_idletasks()
-        top_h = self.top_bar.winfo_reqheight()
-        controls_h = self.controls_row.winfo_reqheight() if self.controls_row is not None else 0
-        shortcut_h = 25
-        total_height = top_h + controls_h + canvas_h + shortcut_h
-        
-        # Store for figure sizing
-        self._canvas_target_w = canvas_w
-        self._canvas_target_h = canvas_h
-        
-        self.root.geometry(f"{app_width}x{total_height}")
-    
     def _create_top_bar(self) -> None:
-        """Create the top bar with category, shape, font, weight, and action controls."""
-        top_bar = tk.Frame(self.root, bg=AppConstants.BG_COLOR)
-        top_bar.grid(row=0, column=0, sticky="ew", padx=5, pady=(3, 0))
+        """Create the top bar — fixed height, never resizes regardless of content."""
+        top_bar = tk.Frame(self.root, bg=AppConstants.BG_COLOR,
+                           height=AppConstants.TOP_BAR_HEIGHT)
+        top_bar.grid(row=0, column=0, sticky="ew")
+        top_bar.grid_propagate(False)   # ← content cannot push this taller
+        top_bar.pack_propagate(False)
         self.top_bar = top_bar
-        
+
         # Center everything in one row
         self.center_container = tk.Frame(top_bar, bg=AppConstants.BG_COLOR)
-        self.center_container.pack(anchor="center")
-        
+        self.center_container.place(relx=0.5, rely=0.5, anchor="center")  # place keeps it centred without affecting frame size
+
         self._create_category_selector()
         self._create_shape_selector()
         self._create_font_selector()
     
     def _create_controls_row(self) -> None:
-        """Create the 5-column controls row above the canvas, spread full width."""
-        controls = tk.Frame(self.root, bg=AppConstants.BG_COLOR)
-        controls.grid(row=1, column=0, sticky="ew", padx=8, pady=(2, 0))
+        """Create the 5-column controls row — fixed height, never resizes regardless of content."""
+        controls = tk.Frame(self.root, bg=AppConstants.BG_COLOR,
+                            height=AppConstants.CONTROLS_HEIGHT)
+        controls.grid(row=1, column=0, sticky="ew")
+        controls.grid_propagate(False)   # ← content cannot push this taller
+        controls.pack_propagate(False)
         self.controls_row = controls
-        
-        # All columns expand evenly to fill width
-        controls.columnconfigure(0, weight=1)  # shape type
-        controls.columnconfigure(1, weight=1)  # transforms
-        controls.columnconfigure(2, weight=1)  # inputs
-        controls.columnconfigure(3, weight=1)  # labels and lines
-        controls.columnconfigure(4, weight=1)  # tools
-        controls.rowconfigure(0, weight=0)
-        
+
+        # Single centered row — use place so it cannot affect the outer frame's size
+        self.controls_center = tk.Frame(controls, bg=AppConstants.BG_COLOR)
+        self.controls_center.place(relx=0.5, rely=0.0, anchor="n")
+
         # Col 0: Shape Type (triangle type, polygon type, default/custom)
-        self.col_shape_type = tk.Frame(controls, bg=AppConstants.BG_COLOR)
-        self.col_shape_type.grid(row=0, column=0, sticky="n", padx=4)
+        self.col_shape_type = tk.Frame(self.controls_center, bg=AppConstants.BG_COLOR)
+        self.col_shape_type.grid(row=0, column=0, sticky="n", padx=2)
         self.col_shape_type.grid_remove()  # hidden until needed
-        
+
         self.shape_options_frame = tk.Frame(self.col_shape_type, bg=AppConstants.BG_COLOR)
         self.shape_options_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 2))
-        
+
         # Col 1: Transforms & Sliders
-        self.col_transforms = tk.Frame(controls, bg=AppConstants.BG_COLOR)
-        self.col_transforms.grid(row=0, column=1, sticky="n", padx=4)
+        self.col_transforms = tk.Frame(self.controls_center, bg=AppConstants.BG_COLOR)
+        self.col_transforms.grid(row=0, column=1, sticky="n", padx=2)
         self.col_transforms.grid_remove()  # hidden until needed
         
         self.options_header = tk.Label(
             self.col_transforms, text="Options", bg=AppConstants.BG_COLOR,
-            font=("Arial", 9, "bold")
+            font=("Arial", 10, "bold")
         )
         self._create_transform_controls()
         self.adjust_sliders_frame = tk.Frame(self.col_transforms, bg=AppConstants.BG_COLOR)
         self.adjust_sliders_frame.pack(side=tk.TOP, pady=(0, 0), fill=tk.X)
         
         # Col 2: Inputs
-        self.col_inputs = tk.Frame(controls, bg=AppConstants.BG_COLOR)
-        self.col_inputs.grid(row=0, column=2, sticky="n", padx=4)
+        self.col_inputs = tk.Frame(self.controls_center, bg=AppConstants.BG_COLOR)
+        self.col_inputs.grid(row=0, column=2, sticky="n", padx=2)
         self.col_inputs.grid_remove()  # hidden until shape selected
-        
+
         self.input_frame = tk.Frame(self.col_inputs, bg=AppConstants.BG_COLOR)
         self.input_frame.pack(side=tk.TOP, anchor="n", fill=tk.X)
-        
+
         # Col 3: Labels and Lines
-        self.col_dimlines = tk.Frame(controls, bg=AppConstants.BG_COLOR)
-        self.col_dimlines.grid(row=0, column=3, sticky="n", padx=4)
+        self.col_dimlines = tk.Frame(self.controls_center, bg=AppConstants.BG_COLOR)
+        self.col_dimlines.grid(row=0, column=3, sticky="n", padx=2)
         self.col_dimlines.grid_remove()  # hidden until shape selected
-        
+
         # Col 4: Tools
-        self.col_tools = tk.Frame(controls, bg=AppConstants.BG_COLOR)
-        self.col_tools.grid(row=0, column=4, sticky="n", padx=4)
+        self.col_tools = tk.Frame(self.controls_center, bg=AppConstants.BG_COLOR)
+        self.col_tools.grid(row=0, column=4, sticky="n", padx=2)
         self.col_tools.grid_remove()  # hidden until shape selected
         
         self._create_right_tools_panel()
     
     def _create_canvas_area(self) -> None:
-        """Create the full-width canvas frame below the controls row."""
-        self.col_canvas = tk.Frame(self.root, bg='#e8e8e8')
-        self.col_canvas.grid(row=2, column=0, sticky="nsew")
+        """Create the canvas frame — fixed size, 5:4 ratio, never resizes."""
+        canvas_w = self._canvas_target_w
+        canvas_h = self._canvas_target_h
+        self.col_canvas = tk.Frame(self.root, bg=AppConstants.CANVAS_BG_COLOR,
+                                   width=canvas_w, height=canvas_h)
+        self.col_canvas.grid(row=2, column=0)
+        self.col_canvas.grid_propagate(False)
+        self.col_canvas.pack_propagate(False)
     
     def _create_shortcut_bar(self) -> None:
-        """Create the keyboard shortcut hint bar."""
-        shortcut_bar = tk.Frame(self.root, bg=AppConstants.BG_COLOR, height=20)
+        """Create the keyboard shortcut hint bar — fixed height, never resizes."""
+        shortcut_bar = tk.Frame(self.root, bg=AppConstants.BG_COLOR,
+                                height=AppConstants.SHORTCUT_BAR_HEIGHT)
         shortcut_bar.grid(row=3, column=0, sticky="ew")
+        shortcut_bar.grid_propagate(False)
+        shortcut_bar.pack_propagate(False)
         shortcut_text = (
             "Reflect [H/V]     •     Rotate [R/L]     •     Undo/Redo [Ctrl+Z/Y]     •     "
             "Save [Ctrl+S]     •     Copy [Ctrl+C]"
         )
         tk.Label(
             shortcut_bar, text=shortcut_text, bg=AppConstants.BG_COLOR, fg="#555555",
-            font=AppConstants.BTN_FONT
-        ).pack(expand=True, pady=2)
+            font=AppConstants.BTN_FONT, pady=1
+        ).place(relx=0.5, rely=0.5, anchor="center")
     
     def _create_category_selector(self) -> None:
-        tk.Label(self.center_container, text="Category:", bg=AppConstants.BG_COLOR, width=8, anchor="e").grid(row=0, column=0, sticky="e", pady=5)
+        tk.Label(self.center_container, text="Category:", bg=AppConstants.BG_COLOR, anchor="e").grid(row=0, column=0, sticky="e", padx=(0,2), pady=5)
         self.cat_var = tk.StringVar()
         self.cat_combo = ttk.Combobox(self.center_container, textvariable=self.cat_var, state="readonly", width=15)
         self.cat_combo["values"] = list(self.shape_data.keys())
@@ -671,7 +695,7 @@ class GeometryApp:
         self.cat_combo.bind("<<ComboboxSelected>>", self.update_shape_list)
     
     def _create_shape_selector(self) -> None:
-        tk.Label(self.center_container, text="Shape:", bg=AppConstants.BG_COLOR, width=8, anchor="e").grid(row=0, column=2, sticky="e", pady=5)
+        tk.Label(self.center_container, text="Shape:", bg=AppConstants.BG_COLOR, anchor="e").grid(row=0, column=2, padx=(10,2), sticky="e", pady=5)
         self.shape_var = tk.StringVar()
         self.shape_combo = ttk.Combobox(self.center_container, textvariable=self.shape_var, state="readonly", width=15)
         self.shape_combo.grid(row=0, column=3, padx=5, pady=5, sticky="w")
@@ -741,11 +765,11 @@ class GeometryApp:
         
         self.flip_label = tk.Label(self.flip_row, text="Reflect:", bg=AppConstants.BG_COLOR, anchor="e")
         self.flip_h_btn = tk.Button(
-            self.flip_row, text="↔", height=1, font=("Arial", 14),
+            self.flip_row, text="↔", height=1, font=("Arial", 10),
             command=lambda: self._flip_with_annotations('h')
         )
         self.flip_v_btn = tk.Button(
-            self.flip_row, text="↕", height=1, font=("Arial", 14),
+            self.flip_row, text="↕", height=1, font=("Arial", 10),
             command=lambda: self._flip_with_annotations('v')
         )
         self.flip_label.grid(row=0, column=0, padx=(0, 5), sticky="e")
@@ -760,16 +784,16 @@ class GeometryApp:
         
         self.rotate_label = tk.Label(self.rotate_row, text="Rotate:", bg=AppConstants.BG_COLOR, anchor="e")
         self.rotate_ccw_btn = tk.Button(
-            self.rotate_row, text="↺", height=1, font=("Arial", 14),
+            self.rotate_row, text="↺", height=1, font=("Arial", 10),
             command=lambda: self._on_rotate_click(-1)
         )
         self.rotate_cw_btn = tk.Button(
-            self.rotate_row, text="↻", height=1, font=("Arial", 14),
+            self.rotate_row, text="↻", height=1, font=("Arial", 10),
             command=lambda: self._on_rotate_click(1)
         )
         
         self.rotation_state_label = tk.Label(
-            self.transform_frame, text="", bg=AppConstants.BG_COLOR, fg="blue", font=("Arial", 8, "italic")
+            self.transform_frame, text="", bg=AppConstants.BG_COLOR, fg="blue", font=("Arial", 9, "italic")
         )
         
         self.rotate_label.grid(row=0, column=0, padx=(0, 5), sticky="e")
@@ -782,110 +806,78 @@ class GeometryApp:
         
         self.tools_header = tk.Label(
             self.right_panel_frame, text="Tools", bg=AppConstants.BG_COLOR,
-            font=("Arial", 9, "bold"), width=22
+            font=("Arial", 10, "bold")
         )
         
         # Undo/Redo
         self.undo_redo_frame = tk.Frame(self.right_panel_frame, bg=AppConstants.BG_COLOR)
         self.undo_redo_frame.columnconfigure(0, weight=1)
         self.undo_redo_frame.columnconfigure(1, weight=1)
-        self.undo_btn = tk.Button(self.undo_redo_frame, text="Undo", font=AppConstants.BTN_FONT, state="disabled", command=self._undo_action)
-        self.redo_btn = tk.Button(self.undo_redo_frame, text="Redo", font=AppConstants.BTN_FONT, state="disabled", command=self._redo_action)
+        self.undo_btn = tk.Button(self.undo_redo_frame, text="Undo", font=AppConstants.BTN_FONT, pady=0, bd=1, state="disabled", command=self._undo_action)
+        self.redo_btn = tk.Button(self.undo_redo_frame, text="Redo", font=AppConstants.BTN_FONT, pady=0, bd=1, state="disabled", command=self._redo_action)
         self.undo_btn.grid(row=0, column=0, padx=(0, 1), sticky="ew")
         self.redo_btn.grid(row=0, column=1, padx=(1, 0), sticky="ew")
         
         # Clear/Reset
-        self.clear_workspace_btn = tk.Button(self.right_panel_frame, text="Clear Values & Labels", font=AppConstants.BTN_FONT, 
-                                            command=self._clear_workspace, fg="red")
+        self.clear_workspace_btn = tk.Button(self.right_panel_frame, text="Clear Values & Labels", font=AppConstants.BTN_FONT,
+                                            pady=0, bd=1, command=self._clear_workspace, fg="black")
         
-        # Help text
-        self.mode_help_label = tk.Label(
-            self.right_panel_frame, text="", bg=AppConstants.BG_COLOR, fg="gray",
-            font=AppConstants.BTN_FONT, justify="left", wraplength=150
-        )
-
         # Scale slider — created once here, shown/hidden by _pack_right_panel
         self.scale_frame = tk.Frame(self.right_panel_frame, bg=AppConstants.BG_COLOR)
         tk.Label(self.scale_frame, text="Scale:", bg=AppConstants.BG_COLOR,
-                 font=("Arial", 8, "bold")).pack(side=tk.LEFT, padx=(0, 4))
+                 font=("Arial", 10, "bold")).pack(side=tk.LEFT, padx=(0, 4))
         ttk.Scale(
             self.scale_frame,
             variable=self.scale_manager.var("view_scale"),
             from_=0.25, to=1.0,
             orient="horizontal",
             command=lambda _: self._apply_view_scale_only()
-        ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True, ipadx=0)
 
     def _setup_canvas_and_controllers(self) -> None:
-        """Create canvas inside col_canvas (full-width) and initialize controllers."""
-        # Save/Copy buttons must exist before window sizing
+        """Create canvas inside col_canvas and initialize controllers.
+        
+        All sizes are fixed at construction time. Window is locked with
+        resizable(False, False) after geometry is set — nothing ever resizes.
+        """
+        # Save/Copy buttons must exist before we proceed
         self._setup_options_panel()
-        
-        # Size window based on top bar width, then derive canvas dimensions
-        self._size_window_to_content()
-        self.root.resizable(False, False)
-        
-        # Give col_canvas the exact target size BEFORE preventing propagation
-        canvas_w = getattr(self, '_canvas_target_w', 970)
-        canvas_h = getattr(self, '_canvas_target_h', 727)
+
+        canvas_w = self._canvas_target_w
+        canvas_h = self._canvas_target_h
+
+        # col_canvas was already created with fixed width/height in _create_canvas_area.
+        # Re-confirm here in case _setup_layout ran with a stale value.
         self.col_canvas.configure(width=canvas_w, height=canvas_h)
-        self.col_canvas.grid_propagate(False)
-        self.col_canvas.pack_propagate(False)
-        
-        # Pre-size figure to measured canvas dimensions so first draw is at full resolution
+
+        # Build the matplotlib figure at exactly the canvas pixel size
         _dpi = 100
-        _fw = getattr(self, '_canvas_target_w', 970) / _dpi
-        _fh = getattr(self, '_canvas_target_h', 727) / _dpi
-        self.fig = Figure(figsize=(_fw, _fh), dpi=_dpi)
-        self.fig.patch.set_facecolor('#e8e8e8')
-        
-        # [left, bottom, width, height] in fractions of figure size
-        # Margin controls the grey border around the white paper.
-        _mx = 0.03  # horizontal margin (left & right)
+        self.fig = Figure(figsize=(canvas_w / _dpi, canvas_h / _dpi), dpi=_dpi)
+        self.fig.patch.set_facecolor(AppConstants.CANVAS_BG_COLOR)
+
+        # Axes positioned to leave a thin grey border around the white paper
+        _mx = AppConstants.CANVAS_PAPER_MARGIN
         _axes_w = 1 - 2 * _mx
-        # Enforce true 4:3 white area: (canvas_w * _axes_w) / (canvas_h * _axes_h) = 4/3
-        _axes_h = (canvas_w * _axes_w * 3.0) / (canvas_h * 4.0)
-        _axes_h = min(_axes_h, 1.0 - 2 * _mx)  # safety only, should be ~0.94
+        _ratio = AppConstants.PAPER_ASPECT_RATIO
+        _axes_h = (canvas_w * _axes_w) / (canvas_h * _ratio)
+        _axes_h = min(_axes_h, 1.0 - 2 * _mx)
         _bottom = (1.0 - _axes_h) / 2.0
         self.ax = self.fig.add_axes([_mx, _bottom, _axes_w, _axes_h])
-        # Store true axes pixel aspect for use in _apply_view_scale
         self._axes_pixel_aspect = (canvas_w * _axes_w) / (canvas_h * _axes_h)
         self.ax.set_facecolor('#ffffff')
         self.ax.set_xticks([])
         self.ax.set_yticks([])
-        
-        # Add permanent 1px black border
+
         for spine in self.ax.spines.values():
             spine.set_visible(True)
             spine.set_edgecolor('black')
             spine.set_linewidth(1.0)
-        
+
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.col_canvas)
         canvas_widget = self.canvas.get_tk_widget()
         canvas_widget.pack(fill=tk.BOTH, expand=True)
-        
-        # Keep figure in sync with widget size; draw_idle() repaints after resize
-        def _fit_figure(event=None):
-            w = canvas_widget.winfo_width()
-            h = canvas_widget.winfo_height()
-            if w > 10 and h > 10:
-                new_w = w / self.fig.dpi
-                new_h = h / self.fig.dpi
-                cur_w, cur_h = self.fig.get_size_inches()
-                if abs(new_w - cur_w) > 0.05 or abs(new_h - cur_h) > 0.05:
-                    self.fig.set_size_inches(new_w, new_h, forward=False)
-                    # axes so the white area stays 4:3 after figure resize.
-                    _mx = 0.03
-                    _axes_w = 1 - 2 * _mx
-                    _axes_h = (w * _axes_w * 3.0) / (h * 4.0)
-                    _axes_h = min(_axes_h, 1.0 - 2 * _mx)
-                    _bottom = (1.0 - _axes_h) / 2.0
-                    self.ax.set_position([_mx, _bottom, _axes_w, _axes_h])
-                    self._axes_pixel_aspect = (w * _axes_w) / (h * _axes_h)
-                    self.canvas.draw_idle()
-        
-        canvas_widget.bind('<Configure>', _fit_figure)
-        
+        # No <Configure> binding on canvas_widget — window is hard-locked.
+
         # Initialize controllers after all UI elements exist
         self.plot_controller = PlotController(self.ax, self.canvas, self.label_manager)
         self.input_controller = InputController(
@@ -900,18 +892,57 @@ class GeometryApp:
             rotate_ccw_btn=self.rotate_ccw_btn,
             rotate_cw_btn=self.rotate_cw_btn
         )
-        
-        # Connect standalone label drag events
+
         self._connect_standalone_drag()
-        
-        # Handle window close to clean up resources
         self.root.protocol("WM_DELETE_WINDOW", self._on_window_close)
-        
-        # Setup keyboard shortcuts
         self._bind_shortcuts()
-        
+
+        # --- Measure full menu bar width before showing welcome ---
+        # show_welcome() hides most top-bar widgets, so we must measure BEFORE
+        # that call (or temporarily force all widgets visible).
+        # Force all center_container columns visible and add Save/Copy so we
+        # measure the widest possible state.
+        for slave in self.center_container.grid_slaves(row=0):
+            slave.grid()
+        self.save_btn.grid(row=0, column=10, padx=1, sticky="e")
+        self.copy_btn.grid(row=0, column=11, padx=1, sticky="e")
+        self.root.update_idletasks()
+        menu_w = self.center_container.winfo_reqwidth() + 20  # +20 for top_bar side padding
+        final_width = menu_w
+
+        # Now show welcome (which hides the extra controls again)
         self.show_welcome()
-    
+
+        # --- Lock window to exact fixed size ---
+        canvas_h = int(final_width * 3 / 4)   # 4:3 ratio
+        final_height = (AppConstants.TOP_BAR_HEIGHT
+                        + AppConstants.CONTROLS_HEIGHT
+                        + canvas_h
+                        + AppConstants.SHORTCUT_BAR_HEIGHT)
+
+        # Sync canvas frame and figure to final_width
+        self.col_canvas.configure(width=final_width, height=canvas_h)
+        _dpi = 100
+        _mx = AppConstants.CANVAS_PAPER_MARGIN
+        _axes_w = 1 - 2 * _mx
+        _ratio = AppConstants.PAPER_ASPECT_RATIO
+        self.fig.set_size_inches(final_width / _dpi, canvas_h / _dpi, forward=False)
+        _axes_h = (final_width * _axes_w) / (canvas_h * _ratio)
+        _axes_h = min(_axes_h, 1.0 - 2 * _mx)
+        _bottom = (1.0 - _axes_h) / 2.0
+        self.ax.set_position([_mx, _bottom, _axes_w, _axes_h])
+        self._axes_pixel_aspect = (final_width * _axes_w) / (canvas_h * _axes_h)
+        self._canvas_target_w = final_width
+        self._canvas_target_h = canvas_h
+
+        # Hard-lock: geometry set once, never changes again
+        self.root.geometry(f"{final_width}x{final_height}")
+        self.root.resizable(False, False)
+
+    def _fit_window_height(self) -> None:
+        """No-op — window size is locked at startup and never changes."""
+        self._window_height_fitted = True
+
     def _on_window_close(self) -> None:
         """Clean up resources before closing the window."""
         self._disconnect_standalone_drag()
@@ -1330,7 +1361,7 @@ class GeometryApp:
     def _add_slider(self, label: str, variable: tk.DoubleVar, 
                     from_val: float, to_val: float, show_center: bool = False, center_value: float = None) -> ttk.Scale:
         """Add a labeled slider with tight vertical packing."""
-        lbl = tk.Label(self.adjust_sliders_frame, text=label, bg=AppConstants.BG_COLOR, font=("Arial", 8, "bold"))
+        lbl = tk.Label(self.adjust_sliders_frame, text=label, bg=AppConstants.BG_COLOR, font=("Arial", 10, "bold"))
         lbl.pack(side=tk.TOP, pady=(2, 0))
         
         slider = ttk.Scale(self.adjust_sliders_frame, variable=variable, from_=from_val, to=to_val, orient="horizontal", command=self.on_slider_change)
@@ -1454,14 +1485,17 @@ class GeometryApp:
         self.ax.clear()
         self.plot_controller.setup_axes()
         
-        # Standardized welcome limits matching the paper aspect ratio
+        # Standardized welcome limits
         self.ax.set_xlim(-10, 10)
-        self.ax.set_ylim(-7, 7)
+        self.ax.set_ylim(-8, 8)
         
-        self.ax.text(0, 1.5, "Welcome to Geometry Forge", 
-                    ha="center", va="center", fontsize=28, fontweight='bold', color="black")
-        self.ax.text(0, -1.0, "Select a Category to Begin", 
-                    ha="center", va="center", fontsize=12, color="black")
+        # Clean, centered welcome with lighter styling
+        self.ax.text(0, 1.0, "Geometry Forge",
+                    ha="center", va="center", fontsize=26, fontweight='bold',
+                    color="#333333", fontfamily="sans-serif")
+        self.ax.text(0, -1.2, "Select a category to begin",
+                    ha="center", va="center", fontsize=11,
+                    color="#888888", fontfamily="sans-serif")
         self.canvas.draw()
 
     def _cancel_after(self, attr_name: str) -> None:
@@ -1583,31 +1617,39 @@ class GeometryApp:
             shape_type_label = f"{shape} Type"
             tk.Label(
                 self.shape_options_frame, text=shape_type_label, bg=AppConstants.BG_COLOR,
-                font=("Arial", 9, "bold")
+                font=("Arial", 10, "bold")
             ).pack(side=tk.TOP, pady=(0, 1), anchor="center")
             self.default_btn = tk.Button(
                 self.shape_options_frame, text="Default", width=10, font=AppConstants.BTN_FONT,
-                command=lambda: self._set_dimension_mode("Default")
+                pady=0, bd=1, command=lambda: self._set_dimension_mode("Default")
             )
             self.default_btn.pack(side=tk.TOP, fill=tk.X, padx=5, pady=(0, 1))
             self.custom_btn = tk.Button(
                 self.shape_options_frame, text="Custom", width=10, font=AppConstants.BTN_FONT,
-                command=lambda: self._set_dimension_mode("Custom")
+                pady=0, bd=1, command=lambda: self._set_dimension_mode("Custom")
             )
             self.custom_btn.pack(side=tk.TOP, fill=tk.X, padx=5)
             self._update_dimension_mode_buttons()
+            # Attach tooltips — split help_text on newline; first line = Default, second = Custom
+            _help_lines = config.help_text.split("\n")
+            _default_tip = _help_lines[0].replace("Default: ", "") if _help_lines else ""
+            _custom_tip = _help_lines[1].replace("Custom: ", "") if len(_help_lines) > 1 else ""
+            if _default_tip:
+                _Tooltip(self.default_btn, _default_tip)
+            if _custom_tip:
+                _Tooltip(self.custom_btn, _custom_tip)
         
         has_shape_specific = shape in ["Triangle", "Polygon"]
-        show_col0 = has_shape_specific or has_shape_type
         is_composite = shape in ("2D Composite", "3D Composite")
-        
-        if show_col0 and not is_composite:
+
+        # --- Column 0: Shape Type ---
+        show_col0 = (has_shape_specific or has_shape_type) and not is_composite
+        if show_col0:
             self.col_shape_type.grid()
         else:
             self.col_shape_type.grid_remove()
-        
-        # --- Column 1: Transforms & Sliders ---
-        # Reset transform widget visibility
+
+        # --- Column 1: Transforms + Sliders ---
         self.options_header.pack_forget()
         self.transform_frame.pack_forget()
         self.flip_row.pack_forget()
@@ -1616,23 +1658,22 @@ class GeometryApp:
         self.adjust_sliders_frame.pack_forget()
         for w in self.adjust_sliders_frame.winfo_children():
             w.destroy()
-        
+
         has_flip = config.has_feature(ShapeFeature.FLIP)
         has_rotate = config.has_feature(ShapeFeature.ROTATE)
         has_transforms = has_flip or has_rotate
-        
+
         has_sliders = False
         if config.has_feature(ShapeFeature.SLIDER_SHAPE):
             has_sliders = True
             self._add_shape_adjust_slider()
-        
+
         show_col1 = (has_transforms or has_sliders) and not is_composite
-        
+
         if show_col1:
             self.col_transforms.grid()
-            
             if has_transforms:
-                self.options_header.pack(side=tk.TOP, pady=(2, 1), anchor="center")
+                self.options_header.pack(side=tk.TOP, pady=(1, 0), anchor="center")
                 self.transform_frame.pack(side=tk.TOP, fill=tk.X)
                 if has_flip:
                     self.flip_row.pack(side=tk.TOP, pady=1, fill=tk.X, padx=5)
@@ -1641,9 +1682,8 @@ class GeometryApp:
                     if config.rotation_labels:
                         self.rotation_state_label.pack(side=tk.TOP, pady=1, anchor="center")
                         self._update_rotation_label(config)
-            
             if has_sliders:
-                self.adjust_sliders_frame.pack(side=tk.TOP, pady=0, fill=tk.X)
+                self.adjust_sliders_frame.pack(side=tk.TOP, pady=(4, 0), fill=tk.X)
         else:
             self.col_transforms.grid_remove()
 
@@ -1941,7 +1981,7 @@ class GeometryApp:
 
         self.triangle_type_label = tk.Label(
             self.shape_options_frame, text="Triangle Type", bg=AppConstants.BG_COLOR,
-            font=("Arial", 9, "bold")
+            font=("Arial", 10, "bold")
         )
         self.triangle_type_label.pack(side=tk.TOP, pady=(0, 2), anchor="center")
 
@@ -1949,7 +1989,7 @@ class GeometryApp:
         for name in ["Custom", "Isosceles", "Scalene", "Equilateral", "Right"]:
             btn = tk.Button(
                 self.shape_options_frame, text=name, width=10, font=AppConstants.BTN_FONT,
-                command=lambda n=name: self._set_triangle_type(n)
+                pady=0, bd=1, command=lambda n=name: self._set_triangle_type(n)
             )
             btn.pack(side=tk.TOP, fill=tk.X, padx=5, pady=1)
             self.tri_buttons[name] = btn
@@ -1972,7 +2012,7 @@ class GeometryApp:
             self.input_controller.build_from_config(config, mode="Custom", slim=True)
 
         self._build_standalone_label_ui()
-        self._pack_right_panel(show_help=True)
+        self._pack_right_panel()
             
     def build_polygon_inputs(self) -> None:
         """Build polygon type selector UI, parallel to build_triangle_inputs."""
@@ -1985,21 +2025,21 @@ class GeometryApp:
 
         tk.Label(
             self.shape_options_frame, text="Polygon Type", bg=AppConstants.BG_COLOR,
-            font=("Arial", 9, "bold")
+            font=("Arial", 10, "bold")
         ).pack(side=tk.TOP, pady=(0, 2), anchor="center")
 
         self.poly_buttons = {}
         for name in [PolygonType.PENTAGON.value, PolygonType.HEXAGON.value, PolygonType.OCTAGON.value]:
             btn = tk.Button(
                 self.shape_options_frame, text=name, width=10, font=AppConstants.BTN_FONT,
-                command=lambda n=name: self._set_polygon_type(n)
+                pady=0, bd=1, command=lambda n=name: self._set_polygon_type(n)
             )
             btn.pack(side=tk.TOP, fill=tk.X, padx=5, pady=1)
             self.poly_buttons[name] = btn
 
         self._update_polygon_button_styles()
         self._build_standalone_label_ui()
-        self._pack_right_panel(show_help=True)
+        self._pack_right_panel()
 
     def _set_polygon_type(self, poly_type: str) -> None:
         """Handle polygon type button clicks."""
@@ -2060,8 +2100,7 @@ class GeometryApp:
             self.col_tools.grid_remove()
 
         # Hide right-panel widgets until a shape is selected
-        if self.mode_help_label is not None:
-            self.mode_help_label.pack_forget()
+        
         if self.clear_workspace_btn is not None:
             self.clear_workspace_btn.pack_forget()
 
@@ -2103,8 +2142,7 @@ class GeometryApp:
         if self._is_composite_shape(shape):
             config = ShapeConfigProvider.get(shape)
             self._build_composite_ui(shape)
-            self._show_help_text(config.help_text)
-            self._pack_right_panel(show_help=True)
+            self._pack_right_panel()
             return
         
         self._configure_transforms(shape)
@@ -2121,12 +2159,10 @@ class GeometryApp:
         
         if config.has_dimension_mode:
             self._rebuild_inputs_for_mode()
-            self._show_help_text(config.help_text)
-            self._pack_right_panel(show_help=True)
+            self._pack_right_panel()
         else:
             self._build_standard_inputs(config)
-            self._show_help_text(config.help_text)
-            self._pack_right_panel(show_help=True)
+            self._pack_right_panel()
     
     def update_inputs(self, _: Any | None = None) -> None:
 
@@ -2182,8 +2218,7 @@ class GeometryApp:
         if self._is_composite_shape(shape):
             config = ShapeConfigProvider.get(shape)
             self._build_composite_ui(shape)
-            self._show_help_text(config.help_text)
-            self._pack_right_panel(show_help=True)
+            self._pack_right_panel()
             self.generate_plot()
             self.root.focus_set()
             return
@@ -2212,12 +2247,10 @@ class GeometryApp:
         if config.has_dimension_mode:
             if hasattr(self, 'dimension_mode_var'):
                 self._rebuild_inputs_for_mode()
-            self._show_help_text(config.help_text)
-            self._pack_right_panel(show_help=True)
+            self._pack_right_panel()
         else:
             self._build_standard_inputs(config)
-            self._show_help_text(config.help_text)
-            self._pack_right_panel(show_help=True)
+            self._pack_right_panel()
         
         self.generate_plot()
         # Capture state after shape UI is fully built and drawn
@@ -2226,35 +2259,18 @@ class GeometryApp:
         
         self.root.focus_set()
     
-    def _show_help_text(self, text: str):
-        """Update help text label."""
-        if self.mode_help_label is not None:
-            self.mode_help_label.config(text=text)
     
     def _build_standard_inputs(self, config: ShapeConfig) -> None:
         """Build standard shape UI — no entry table for non-dimension-mode shapes.
         Labels are auto-populated from ShapeConfig defaults via _populate_label_texts."""
         self._build_standalone_label_ui()
-        self._pack_right_panel(show_help=True)
+        self._pack_right_panel()
 
     def _build_standalone_label_ui(self) -> None:
         """Build label entry controls (col 2) and dim line controls (col 3)."""
         # --- Col 2: Label entry and hashmarks ---
         container = tk.Frame(self.input_frame, bg=AppConstants.BG_COLOR)
-        container.grid(row=100, column=0, columnspan=5, sticky="ew", pady=(4, 0))
-
-        # Hashmarks checkbox (only for polygon shapes)
-        shape = self.shape_var.get()
-        if shape in SmartGeometryEngine.POLYGON_SHAPES:
-            hm_frame = tk.Frame(container, bg=AppConstants.BG_COLOR)
-            hm_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 2))
-            if not hasattr(self, 'show_hashmarks_var'):
-                self.show_hashmarks_var = tk.BooleanVar(value=False)
-            tk.Checkbutton(
-                hm_frame, text="Show Hashmarks", bg=AppConstants.BG_COLOR,
-                variable=self.show_hashmarks_var,
-                command=self._on_hashmarks_changed, takefocus=0
-            ).pack(side=tk.LEFT, padx=(0, 4))
+        container.grid(row=100, column=0, columnspan=5, sticky="ew", pady=(2, 0))
 
         # --- Col 3: Labels and Lines ---
         # Clear previous widgets
@@ -2272,22 +2288,22 @@ class GeometryApp:
         
         # Header
         tk.Label(self.col_dimlines, text="Labels and Lines", bg=AppConstants.BG_COLOR,
-                 font=("Arial", 9, "bold")).pack(side=tk.TOP, anchor="center", pady=(0, 2))
+                 font=("Arial", 10, "bold")).pack(side=tk.TOP, anchor="center", pady=(0, 1))
         
         # Entry row: [         ] [+ Text]
         label_frame = tk.Frame(self.col_dimlines, bg=AppConstants.BG_COLOR)
-        label_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 2))
+        label_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 1))
         
         self._standalone_label_entry = tk.Entry(label_frame, width=10, font=AppConstants.BTN_FONT)
         self._standalone_label_entry.pack(side=tk.LEFT, padx=(0, 2), fill=tk.X, expand=True)
         self._standalone_label_entry.bind('<Return>', lambda e: self._confirm_standalone_label())
         
         self._standalone_text_btn = tk.Button(label_frame, text="+ Text", font=AppConstants.BTN_FONT,
-                  command=self._confirm_standalone_label)
+                  pady=0, bd=1, command=self._confirm_standalone_label)
         self._standalone_text_btn.pack(side=tk.LEFT, padx=1)
         
         self._standalone_cancel_btn = tk.Button(label_frame, text="Cancel", font=AppConstants.BTN_FONT,
-                  command=self._cancel_standalone_edit)
+                  pady=0, bd=1, command=self._cancel_standalone_edit)
         # Hidden by default — shown only during edit mode
         
         # 2-column grid of preset line buttons + Free
@@ -2299,15 +2315,15 @@ class GeometryApp:
         all_buttons = [(p["label"], lambda k=p["key"], t=p["default_text"]: self._add_standalone_dim_preset(k, t)) for p in presets]
         
         self._standalone_free_btn = tk.Button(btn_grid, text="Free", font=AppConstants.BTN_FONT,
-                  command=self._start_standalone_dim_mode)
+                  pady=0, bd=1, command=self._start_standalone_dim_mode)
         self._standalone_cancel_dim_btn = tk.Button(btn_grid, text="Cancel", font=AppConstants.BTN_FONT,
-                  command=self._cancel_standalone_dim_mode)
+                  pady=0, bd=1, command=self._cancel_standalone_dim_mode)
         
         row = 0
         col = 0
         for label_text, cmd in all_buttons:
             tk.Button(btn_grid, text=label_text, font=AppConstants.BTN_FONT,
-                      command=cmd).grid(row=row, column=col, padx=1, pady=1, sticky="ew")
+                      pady=0, bd=1, command=cmd).grid(row=row, column=col, padx=1, pady=1, sticky="ew")
             col += 1
             if col > 1:
                 col = 0
@@ -2319,10 +2335,17 @@ class GeometryApp:
         self._standalone_cancel_dim_btn.grid(row=row, column=col, padx=1, pady=1, sticky="ew")
         self._standalone_cancel_dim_btn.grid_remove()
         
-        # Delete spanning both columns
-        tk.Button(self.col_dimlines, text="Delete Selected", font=AppConstants.BTN_FONT,
-                  command=self._remove_standalone_annotation).pack(side=tk.TOP, pady=(2, 0))
-        
+        # Show Hashmarks checkbox (only for polygon shapes) — replaces Delete Selected
+        shape = self.shape_var.get()
+        if shape in SmartGeometryEngine.POLYGON_SHAPES:
+            if not hasattr(self, 'show_hashmarks_var'):
+                self.show_hashmarks_var = tk.BooleanVar(value=False)
+            tk.Checkbutton(
+                self.col_dimlines, text="Show Hashmarks", bg=AppConstants.BG_COLOR,
+                variable=self.show_hashmarks_var,
+                command=self._on_hashmarks_changed, takefocus=0
+            ).pack(side=tk.TOP, pady=(2, 0))
+
         # Show col 3
         self.col_dimlines.grid()
 
@@ -2363,7 +2386,7 @@ class GeometryApp:
             w.destroy()
 
         tk.Label(self.col_dimlines, text="Labels and Lines", bg=AppConstants.BG_COLOR,
-                 font=("Arial", 9, "bold")).pack(side=tk.TOP, anchor="center", pady=(0, 2))
+                 font=("Arial", 10, "bold")).pack(side=tk.TOP, anchor="center", pady=(0, 2))
 
         # Entry + "+ Text" row
         entry_row = tk.Frame(self.col_dimlines, bg=AppConstants.BG_COLOR)
@@ -2374,11 +2397,11 @@ class GeometryApp:
         self._composite_label_entry.bind('<Return>', lambda e: self._confirm_composite_label())
 
         self._composite_text_btn = tk.Button(entry_row, text="+ Text", font=AppConstants.BTN_FONT,
-                                              command=self._confirm_composite_label)
+                                              pady=0, bd=1, command=self._confirm_composite_label)
         self._composite_text_btn.pack(side=tk.LEFT, padx=1)
 
         self._composite_cancel_btn = tk.Button(entry_row, text="Cancel", font=AppConstants.BTN_FONT,
-                                               command=self._cancel_composite_edit)
+                                               pady=0, bd=1, command=self._cancel_composite_edit)
         # Hidden by default — shown only during edit mode
 
         # 2-column preset grid  (Height | Width  /  Radius | + Line)
@@ -2390,19 +2413,16 @@ class GeometryApp:
         presets = [("Height", "height"), ("Width", "width"), ("Radius", "radius")]
         for i, (label, key) in enumerate(presets):
             tk.Button(btn_grid, text=label, font=AppConstants.BTN_FONT,
-                      command=lambda k=key: self._start_dim_line_mode(k)
+                      pady=0, bd=1, command=lambda k=key: self._start_dim_line_mode(k)
                       ).grid(row=i // 2, column=i % 2, padx=1, pady=1, sticky="ew")
 
         tk.Button(btn_grid, text="+ Line", font=AppConstants.BTN_FONT,
-                  command=lambda: self._start_dim_line_mode("free")
+                  pady=0, bd=1, command=lambda: self._start_dim_line_mode("free")
                   ).grid(row=1, column=1, padx=1, pady=1, sticky="ew")
-
-        tk.Button(self.col_dimlines, text="Delete Selected", font=AppConstants.BTN_FONT,
-                  command=self._remove_selected_annotation).pack(side=tk.TOP, pady=(2, 0))
 
         # Status label for dim-line placement feedback
         self._dim_status_label = tk.Label(self.col_dimlines, text="", bg=AppConstants.BG_COLOR,
-                                           font=("Arial", 8, "italic"), fg="#0066cc")
+                                           font=("Arial", 9, "italic"), fg="#0066cc")
         self._dim_status_label.pack(side=tk.TOP, fill=tk.X, pady=(1, 0))
 
         self.col_dimlines.grid()
@@ -4229,7 +4249,7 @@ class GeometryApp:
         if points and len(points) >= 3:
             SmartGeometryEngine.draw_smart_hashmarks(ctx, points)
 
-    def _pack_right_panel(self, show_help: bool = True) -> None:
+    def _pack_right_panel(self) -> None:
         """Pack right panel (col_tools) widgets without triggering recursive layout events."""
         # Skip entirely during state restoration to prevent flash
         if self.history_manager.is_restoring:
@@ -4238,7 +4258,7 @@ class GeometryApp:
         # Destroy any dynamically-created children that are not persistent widgets.
         # scale_frame is persistent and managed via pack/pack_forget below.
         persistent = (self.tools_header, self.undo_redo_frame,
-                      self.clear_workspace_btn, self.mode_help_label,
+                      self.clear_workspace_btn,
                       self.scale_frame)
         for child in list(self.col_tools.winfo_children()):
             if child not in persistent:
@@ -4247,21 +4267,19 @@ class GeometryApp:
         # Show the tools column
         self.col_tools.grid()
 
+
         # Pack persistent widgets in order
         self.tools_header.pack(side=tk.TOP)
         self.undo_redo_frame.pack(side=tk.TOP, fill=tk.X, pady=1)
-        self.clear_workspace_btn.pack(side=tk.TOP, fill=tk.X, pady=1)
 
         # Scale slider: show for standalone shapes, hide for composite
         if not self._is_composite_shape():
-            self.scale_frame.pack(side=tk.TOP, fill=tk.X, pady=(6, 0))
+            self.scale_frame.pack(side=tk.TOP, pady=(2, 0))
         else:
             self.scale_frame.pack_forget()
 
-        if show_help and self.mode_help_label.cget("text"):
-            self.mode_help_label.pack(side=tk.TOP, fill=tk.X, pady=1)
-        else:
-            self.mode_help_label.pack_forget()
+        self.clear_workspace_btn.pack(side=tk.TOP, pady=1)
+
     
     def _bind_shortcuts(self) -> None:
         """Centralized keyboard shortcut binding for all platforms."""
@@ -4369,6 +4387,3 @@ class GeometryApp:
         config = ShapeConfigProvider.get(self.shape_var.get())
         if config.has_feature(ShapeFeature.FLIP):
             self._flip_with_annotations(axis)
-
-
-
