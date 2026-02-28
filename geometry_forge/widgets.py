@@ -37,41 +37,42 @@ class CompositeTransferList(tk.Frame):
         src_frame.pack(side=tk.LEFT, fill=tk.BOTH, padx=(0, 2))
 
         tk.Label(src_frame, text="Available", bg=AppConstants.BG_COLOR,
-                 font=("Arial", 8, "bold")).pack(side=tk.TOP)
+                 font=AppConstants.HEADER_FONT).pack(side=tk.TOP)
 
         self.source_listbox = tk.Listbox(src_frame, width=18, height=5,
-                                          selectmode=tk.SINGLE, exportselection=False)
+                                          selectmode=tk.SINGLE, exportselection=False,
+                                          relief="flat", bd=0,
+                                          highlightthickness=1,
+                                          highlightbackground="#aaaaaa",
+                                          highlightcolor="#aaaaaa")
         self.source_listbox.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self.source_listbox.bind("<Double-Button-1>", lambda e: self._add_selected())
 
         for shape in self.available_shapes:
             self.source_listbox.insert(tk.END, self.DISPLAY_NAMES.get(shape, shape))
 
-        # --- Arrow buttons column ---
-        btn_frame = tk.Frame(self, bg=AppConstants.BG_COLOR)
-        btn_frame.pack(side=tk.LEFT, fill=tk.Y, padx=4)
-
-        tk.Frame(btn_frame, bg=AppConstants.BG_COLOR, height=10).pack(side=tk.TOP)
-
-        self.add_btn = tk.Button(btn_frame, text="→", width=1, font=AppConstants.BTN_FONT,
-                                  command=self._add_selected)
-        self.add_btn.pack(side=tk.TOP, pady=2)
-
-        self.remove_btn = tk.Button(btn_frame, text="←", width=1, font=AppConstants.BTN_FONT,
-                                     command=self._remove_selected)
-        self.remove_btn.pack(side=tk.TOP, pady=2)
+        tk.Label(src_frame, text="double-click to select", bg=AppConstants.BG_COLOR,
+                 font=("Arial", 7), fg="#888888").pack(side=tk.TOP)
 
         # --- Destination column (drag-to-reorder) ---
+        # Gap replaces the old arrow-button column
         dest_outer = tk.Frame(self, bg=AppConstants.BG_COLOR)
-        dest_outer.pack(side=tk.LEFT, fill=tk.BOTH, padx=(2, 0))
+        dest_outer.pack(side=tk.LEFT, fill=tk.BOTH, padx=(10, 0))
 
-        tk.Label(dest_outer, text="Selected  ☰ drag to reorder", bg=AppConstants.BG_COLOR,
-                 font=("Arial", 8, "bold")).pack(side=tk.TOP)
+        tk.Label(dest_outer, text="Selected", bg=AppConstants.BG_COLOR,
+                 font=AppConstants.HEADER_FONT).pack(side=tk.TOP)
 
-        self.dest_listbox = tk.Listbox(dest_outer, width=13, height=10,
+        self.dest_listbox = tk.Listbox(dest_outer, width=18, height=10,
                                         selectmode=tk.SINGLE, exportselection=False,
-                                        cursor="arrow")
+                                        cursor="arrow",
+                                        relief="flat", bd=0,
+                                        highlightthickness=1,
+                                        highlightbackground="#aaaaaa",
+                                        highlightcolor="#aaaaaa")
         self.dest_listbox.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        tk.Label(dest_outer, text="☰ drag to reorder", bg=AppConstants.BG_COLOR,
+                 font=("Arial", 7), fg="#888888").pack(side=tk.TOP)
 
         # Drag-to-reorder bindings
         self.dest_listbox.bind("<Button-1>",        self._drag_start)

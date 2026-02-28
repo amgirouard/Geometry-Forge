@@ -66,6 +66,7 @@ class AppConstants:
     MAX_FONT_SIZE: int = 48
     DEFAULT_FONT_FAMILY: str = "serif"
     BTN_FONT: tuple = ("Arial", 10)   # Standard button font — apply to all tk.Button widgets for consistency
+    HEADER_FONT: tuple = ("Arial", 8, "bold")  # Section header font — apply to all column/panel headers
     
     SLIDER_MIN: float = 0.1
     SLIDER_MAX: float = 1.9
@@ -168,7 +169,7 @@ class AppConstants:
 
     # Window layout — all heights in pixels; width is determined at runtime by
     # the menu bar's natural rendered width and never hardcoded.
-    CONTROLS_HEIGHT: int = 170           # Fixed height for controls row (sized for triangle — tallest shape)
+    CONTROLS_HEIGHT: int = 155           # Fixed height for controls row (sized for triangle — tallest shape)
     TOP_BAR_HEIGHT: int = 46              # Category/Shape/Font selector bar
     SHORTCUT_BAR_HEIGHT: int = 24         # Keyboard shortcut hint bar
     CANVAS_PAPER_MARGIN: float = 0.04    # Grey border around white paper (fraction of figure)

@@ -85,6 +85,10 @@ class CompositeDragController:
         except Exception:
             pass
         if event.inaxes != app.ax:
+            # Cancel dim-line placement if user clicks outside the canvas
+            if self.dim_mode is not None:
+                self.cancel_dim_mode()
+                app.generate_plot()
             return
         if not app._is_composite_shape():
             return
@@ -471,10 +475,15 @@ class CompositeDragController:
                         if bbox != (0, 0, 0, 0) and bbox[0] <= mx <= bbox[2] and bbox[1] <= my <= bbox[3]:
                             hit = True; break
                 desired = "fleur" if hit else "arrow"
-                if app.root.cget("cursor") != desired:
+                # Never overwrite the crosshair cursor while dim-placement is active
+                if self.dim_mode is not None:
+                    pass  # keep crosshair; don't change cursor during dim mode
+                elif app.root.cget("cursor") != desired:
                     app.root.config(cursor=desired)
             else:
-                if app.root.cget("cursor") not in ("crosshair", "fleur"):
+                if self.dim_mode is not None:
+                    pass  # keep crosshair even when mouse leaves axes during dim mode
+                elif app.root.cget("cursor") not in ("crosshair", "fleur"):
                     app.root.config(cursor="arrow")
             return
 
@@ -576,7 +585,8 @@ class CompositeDragController:
             is_dim_label = dtype == "dim_label"
             is_dim_body = dtype == "dim_body"
             self.label_drag = None
-            app.root.config(cursor="arrow")
+            if self.dim_mode is None:
+                app.root.config(cursor="arrow")
             if was_drag:
                 app.generate_plot()
                 if not app.history_manager.is_restoring:
@@ -649,7 +659,8 @@ class CompositeDragController:
 
         self.drag_state = None
         self.snap_guides = []
-        app.root.config(cursor="arrow")
+        if self.dim_mode is None:
+            app.root.config(cursor="arrow")
 
         if was_drag:
             app.generate_plot()

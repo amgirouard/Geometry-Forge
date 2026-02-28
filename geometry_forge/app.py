@@ -149,6 +149,7 @@ class GeometryApp:
         self.col_inputs = None
         self.col_dimlines = None
         self.col_tools = None
+        self.col_presets = None
         self.controls_row = None
         self.center_container = None
         self.mode_help_label = None
@@ -702,7 +703,7 @@ class GeometryApp:
         
         self.options_header = tk.Label(
             self.col_transforms, text="Options", bg=AppConstants.BG_COLOR,
-            font=("Arial", 10, "bold")
+            font=AppConstants.HEADER_FONT
         )
         self._create_transform_controls()
         self.adjust_sliders_frame = tk.Frame(self.col_transforms, bg=AppConstants.BG_COLOR)
@@ -718,12 +719,17 @@ class GeometryApp:
 
         # Col 3: Labels and Lines
         self.col_dimlines = tk.Frame(self.controls_center, bg=AppConstants.BG_COLOR)
-        self.col_dimlines.grid(row=0, column=3, sticky="n", padx=2)
+        self.col_dimlines.grid(row=0, column=3, sticky="n", padx=(5, 0))
         self.col_dimlines.grid_remove()  # hidden until shape selected
 
-        # Col 4: Tools
+        # Col 4: Presets (composite only)
+        self.col_presets = tk.Frame(self.controls_center, bg=AppConstants.BG_COLOR)
+        self.col_presets.grid(row=0, column=4, sticky="n", padx=(4, 0))
+        self.col_presets.grid_remove()  # hidden until composite shape selected
+
+        # Col 5: Tools
         self.col_tools = tk.Frame(self.controls_center, bg=AppConstants.BG_COLOR)
-        self.col_tools.grid(row=0, column=4, sticky="n", padx=2)
+        self.col_tools.grid(row=0, column=5, sticky="n", padx=2)
         self.col_tools.grid_remove()  # hidden until shape selected
         
         self._create_right_tools_panel()
@@ -875,7 +881,7 @@ class GeometryApp:
         
         self.tools_header = tk.Label(
             self.right_panel_frame, text="Tools", bg=AppConstants.BG_COLOR,
-            font=("Arial", 10, "bold")
+            font=AppConstants.HEADER_FONT
         )
         
         # Undo/Redo
@@ -893,15 +899,15 @@ class GeometryApp:
         
         # Scale slider — created once here, shown/hidden by _pack_right_panel
         self.scale_frame = tk.Frame(self.right_panel_frame, bg=AppConstants.BG_COLOR)
-        tk.Label(self.scale_frame, text="Scale:", bg=AppConstants.BG_COLOR,
-                 font=("Arial", 10, "bold")).pack(side=tk.LEFT, padx=(0, 4))
+        tk.Label(self.scale_frame, text="Scale", bg=AppConstants.BG_COLOR,
+                 font=AppConstants.HEADER_FONT).pack(side=tk.TOP, anchor="center")
         ttk.Scale(
             self.scale_frame,
             variable=self.scale_manager.var("view_scale"),
             from_=0.25, to=1.0,
             orient="horizontal",
             command=lambda _: self._apply_view_scale_only()
-        ).pack(side=tk.LEFT, fill=tk.X, expand=True, ipadx=0)
+        ).pack(side=tk.TOP, fill=tk.X, expand=True, ipadx=0)
 
     def _setup_canvas_and_controllers(self) -> None:
         """Create canvas inside col_canvas and initialize controllers.
@@ -1413,24 +1419,24 @@ class GeometryApp:
         """Add parallelogram slope slider with center tick at 0.0, default position at 0.3."""
         self.parallelogram_slope_var = self.scale_manager.var("slope")
         spec = self.scale_manager.specs["slope"]
-        self._add_slider("Adjust Slope:", self.parallelogram_slope_var, spec.min_val, spec.max_val, show_center=True, center_value=0.0)
+        self._add_slider("Adjust Slope", self.parallelogram_slope_var, spec.min_val, spec.max_val, show_center=True, center_value=0.0)
     
     def _add_shape_adjust_slider(self) -> None:
         """Add default shape adjustment slider."""
         aspect_var = self.scale_manager.var("aspect")
-        self._add_slider("Adjust Shape:", aspect_var, 
+        self._add_slider("Adjust Shape", aspect_var, 
                          AppConstants.SLIDER_MIN, AppConstants.SLIDER_MAX, show_center=False)
     
     def _add_peak_offset_slider(self) -> None:
         """Add triangle peak offset slider."""
         self.peak_offset_var = self.scale_manager.var("peak_offset")
         spec = self.scale_manager.specs["peak_offset"]
-        self._add_slider("Peak Offset:", self.peak_offset_var, spec.min_val, spec.max_val, show_center=False)
+        self._add_slider("Peak Offset", self.peak_offset_var, spec.min_val, spec.max_val, show_center=False)
     
     def _add_slider(self, label: str, variable: tk.DoubleVar, 
                     from_val: float, to_val: float, show_center: bool = False, center_value: float = None) -> ttk.Scale:
         """Add a labeled slider with tight vertical packing."""
-        lbl = tk.Label(self.adjust_sliders_frame, text=label, bg=AppConstants.BG_COLOR, font=("Arial", 10, "bold"))
+        lbl = tk.Label(self.adjust_sliders_frame, text=label, bg=AppConstants.BG_COLOR, font=AppConstants.HEADER_FONT)
         lbl.pack(side=tk.TOP, pady=(2, 0))
         
         slider = ttk.Scale(self.adjust_sliders_frame, variable=variable, from_=from_val, to=to_val, orient="horizontal", command=self.on_slider_change)
@@ -1549,6 +1555,7 @@ class GeometryApp:
         if self.col_transforms is not None: self.col_transforms.grid_remove()
         if self.col_inputs is not None: self.col_inputs.grid_remove()
         if self.col_dimlines is not None: self.col_dimlines.grid_remove()
+        if self.col_presets is not None: self.col_presets.grid_remove()
         if self.col_tools is not None: self.col_tools.grid_remove()
         
         self.ax.clear()
@@ -1686,7 +1693,7 @@ class GeometryApp:
             shape_type_label = f"{shape} Type"
             tk.Label(
                 self.shape_options_frame, text=shape_type_label, bg=AppConstants.BG_COLOR,
-                font=("Arial", 10, "bold")
+                font=AppConstants.HEADER_FONT
             ).pack(side=tk.TOP, pady=(0, 1), anchor="center")
             self.default_btn = tk.Button(
                 self.shape_options_frame, text="Default", width=10, font=AppConstants.BTN_FONT,
@@ -2050,7 +2057,7 @@ class GeometryApp:
 
         self.triangle_type_label = tk.Label(
             self.shape_options_frame, text="Triangle Type", bg=AppConstants.BG_COLOR,
-            font=("Arial", 10, "bold")
+            font=AppConstants.HEADER_FONT
         )
         self.triangle_type_label.pack(side=tk.TOP, pady=(0, 2), anchor="center")
 
@@ -2094,7 +2101,7 @@ class GeometryApp:
 
         tk.Label(
             self.shape_options_frame, text="Polygon Type", bg=AppConstants.BG_COLOR,
-            font=("Arial", 10, "bold")
+            font=AppConstants.HEADER_FONT
         ).pack(side=tk.TOP, pady=(0, 2), anchor="center")
 
         self.poly_buttons = {}
@@ -2165,6 +2172,8 @@ class GeometryApp:
             self.col_inputs.grid_remove()
         if self.col_dimlines is not None:
             self.col_dimlines.grid_remove()
+        if self.col_presets is not None:
+            self.col_presets.grid_remove()
         if self.col_tools is not None:
             self.col_tools.grid_remove()
 
@@ -2196,6 +2205,8 @@ class GeometryApp:
             self.col_inputs.grid()
         if self.col_dimlines is not None:
             self.col_dimlines.grid()
+        if self.col_presets is not None and self._is_composite_shape(shape):
+            self.col_presets.grid()
         if self.col_tools is not None:
             self.col_tools.grid()
         
@@ -2357,7 +2368,7 @@ class GeometryApp:
         
         # Header
         tk.Label(self.col_dimlines, text="Labels and Lines", bg=AppConstants.BG_COLOR,
-                 font=("Arial", 10, "bold")).pack(side=tk.TOP, anchor="center", pady=(0, 1))
+                 font=AppConstants.HEADER_FONT).pack(side=tk.TOP, anchor="center", pady=(0, 1))
         
         # Entry row: [         ] [+ Text]
         label_frame = tk.Frame(self.col_dimlines, bg=AppConstants.BG_COLOR)
@@ -2438,14 +2449,14 @@ class GeometryApp:
         ctrl = self.composite_ctrl
         if len(ctrl.selected) != 1:
             tk.Label(frame, text="(select one shape)", bg=AppConstants.BG_COLOR,
-                     font=("Arial", 8, "italic"), fg="#888888").pack(side=tk.TOP, anchor="w", padx=4)
+                     font=("Arial", 8, "italic"), fg="#888888").pack(side=tk.TOP, anchor="center")
             return
         sel_idx = next(iter(ctrl.selected))
         selected_shapes = (self.composite_transfer.get_selected_shapes()
                            if self.composite_transfer is not None else [])
         if sel_idx >= len(selected_shapes):
             tk.Label(frame, text="(select one shape)", bg=AppConstants.BG_COLOR,
-                     font=("Arial", 8, "italic"), fg="#888888").pack(side=tk.TOP, anchor="w", padx=4)
+                     font=("Arial", 8, "italic"), fg="#888888").pack(side=tk.TOP, anchor="center")
             return
         shape_name = selected_shapes[sel_idx]
         # Circumference is a special arc toggle in standalone mode, not a placeable
@@ -2453,7 +2464,7 @@ class GeometryApp:
         presets = [p for p in preset_defs.get(shape_name, []) if p["key"] != "circumference"]
         if not presets:
             tk.Label(frame, text=f"(no presets for {shape_name})", bg=AppConstants.BG_COLOR,
-                     font=("Arial", 8, "italic"), fg="#888888").pack(side=tk.TOP, anchor="w", padx=4)
+                     font=("Arial", 8, "italic"), fg="#888888").pack(side=tk.TOP, anchor="center")
             return
         btn_grid = tk.Frame(frame, bg=AppConstants.BG_COLOR)
         btn_grid.pack(side=tk.TOP, fill=tk.X)
@@ -2494,13 +2505,13 @@ class GeometryApp:
             w.destroy()
 
         tk.Label(self.col_dimlines, text="Labels and Lines", bg=AppConstants.BG_COLOR,
-                 font=("Arial", 10, "bold")).pack(side=tk.TOP, anchor="center", pady=(0, 2))
+                 font=AppConstants.HEADER_FONT).pack(side=tk.TOP, anchor="center", pady=(1, 2))
 
         # Entry + "+ Text" row
         entry_row = tk.Frame(self.col_dimlines, bg=AppConstants.BG_COLOR)
         entry_row.pack(side=tk.TOP, fill=tk.X, pady=(0, 2))
 
-        self._composite_label_entry = tk.Entry(entry_row, width=10, font=AppConstants.BTN_FONT)
+        self._composite_label_entry = tk.Entry(entry_row, width=8, font=AppConstants.BTN_FONT)
         self._composite_label_entry.pack(side=tk.LEFT, padx=(0, 2), fill=tk.X, expand=True)
         self._composite_label_entry.bind('<Return>', lambda e: self._confirm_composite_label())
 
@@ -2512,34 +2523,27 @@ class GeometryApp:
                                                pady=0, bd=1, command=self._cancel_composite_edit)
         # Hidden by default — shown only during edit mode
 
-        # ── Manual line buttons: Vertical | Horizontal | + Line ──────────
-        manual_grid = tk.Frame(self.col_dimlines, bg=AppConstants.BG_COLOR)
+        # ── Manual line buttons: ↕ | ↔ with labels directly beneath, then + Free Line ──
+        manual_grid = tk.Frame(self.col_dimlines, bg=AppConstants.BG_COLOR, width=155)
         manual_grid.pack(side=tk.TOP, fill=tk.X)
         manual_grid.columnconfigure(0, weight=1)
         manual_grid.columnconfigure(1, weight=1)
-        tk.Button(manual_grid, text="Vertical", font=AppConstants.BTN_FONT,
+        tk.Button(manual_grid, text="↕", font=("Arial", 12),
                   pady=0, bd=1, command=lambda: self._start_dim_line_mode("height")
-                  ).grid(row=0, column=0, padx=1, pady=1, sticky="ew")
-        tk.Button(manual_grid, text="Horizontal", font=AppConstants.BTN_FONT,
+                  ).grid(row=0, column=0, padx=1, pady=(1, 0), sticky="ew")
+        tk.Button(manual_grid, text="↔", font=("Arial", 12),
                   pady=0, bd=1, command=lambda: self._start_dim_line_mode("width")
-                  ).grid(row=0, column=1, padx=1, pady=1, sticky="ew")
-        tk.Button(manual_grid, text="+ Line", font=AppConstants.BTN_FONT,
+                  ).grid(row=0, column=1, padx=1, pady=(1, 0), sticky="ew")
+        # Sub-labels directly beneath the arrow buttons
+        tk.Label(manual_grid, text="Vertical", bg=AppConstants.BG_COLOR,
+                 font=("Arial", 7), fg="#888888", anchor="center"
+                 ).grid(row=1, column=0, sticky="ew", pady=(0, 2))
+        tk.Label(manual_grid, text="Horizontal", bg=AppConstants.BG_COLOR,
+                 font=("Arial", 7), fg="#888888", anchor="center"
+                 ).grid(row=1, column=1, sticky="ew", pady=(0, 2))
+        tk.Button(manual_grid, text="+ Free Line", font=AppConstants.BTN_FONT,
                   pady=0, bd=1, command=lambda: self._start_dim_line_mode("free")
-                  ).grid(row=1, column=0, columnspan=2, padx=1, pady=1, sticky="ew")
-
-        # ── Presets section ───────────────────────────────────────────────
-        tk.Label(self.col_dimlines, text="Presets", bg=AppConstants.BG_COLOR,
-                 font=("Arial", 8, "bold")).pack(side=tk.TOP, anchor="w", pady=(4, 0), padx=2)
-
-        # Use the same preset definitions as standalone mode so composite and
-        # standalone always stay in sync — no separate list to maintain.
-        self._composite_preset_defs = self._DIM_PRESETS
-
-        preset_outer = tk.Frame(self.col_dimlines, bg=AppConstants.BG_COLOR)
-        preset_outer.pack(side=tk.TOP, fill=tk.X)
-        self._composite_preset_frame = preset_outer
-        tk.Label(preset_outer, text="(select one shape)", bg=AppConstants.BG_COLOR,
-                 font=("Arial", 8, "italic"), fg="#888888").pack(side=tk.TOP, anchor="w", padx=4)
+                  ).grid(row=2, column=0, columnspan=2, padx=1, pady=1, sticky="ew")
 
         # Status label for dim-line placement feedback
         self._dim_status_label = tk.Label(self.col_dimlines, text="", bg=AppConstants.BG_COLOR,
@@ -2547,6 +2551,26 @@ class GeometryApp:
         self._dim_status_label.pack(side=tk.TOP, fill=tk.X, pady=(1, 0))
 
         self.col_dimlines.grid()
+
+        # ── Presets column (col_presets) ──────────────────────────────────────
+        for w in self.col_presets.winfo_children():
+            w.destroy()
+
+        tk.Label(self.col_presets, text="Presets", bg=AppConstants.BG_COLOR,
+                 font=AppConstants.HEADER_FONT).pack(side=tk.TOP, anchor="center", pady=(0, 2))
+
+        # Invisible spacer ensures column never collapses below a minimum width
+        tk.Frame(self.col_presets, bg=AppConstants.BG_COLOR, width=155, height=1).pack()
+
+        self._composite_preset_defs = self._DIM_PRESETS
+
+        preset_outer = tk.Frame(self.col_presets, bg=AppConstants.BG_COLOR)
+        preset_outer.pack(side=tk.TOP, fill=tk.X)
+        self._composite_preset_frame = preset_outer
+        tk.Label(preset_outer, text="(select one shape)", bg=AppConstants.BG_COLOR,
+                 font=("Arial", 8, "italic"), fg="#888888").pack(side=tk.TOP, anchor="center")
+
+        self.col_presets.grid()
         
         # Cached view limits — only recalculated on shape add/remove, not during drag
         self._composite_view_limits = None
@@ -4300,7 +4324,7 @@ class GeometryApp:
                 self.ax.set_ylim(0, page_h)
                 self.ax.text(
                     0.5, 0.5,
-                    "Add shapes from the Available list\nusing the → button",
+                    "Add shapes from the Available list",
                     ha="center", va="center", fontsize=14, color="gray",
                     transform=self.ax.transAxes,
                 )
@@ -4581,14 +4605,13 @@ class GeometryApp:
         # Pack persistent widgets in order
         self.tools_header.pack(side=tk.TOP)
         self.undo_redo_frame.pack(side=tk.TOP, fill=tk.X, pady=1)
+        self.clear_workspace_btn.pack(side=tk.TOP, pady=(6,1))
 
         # Scale slider: show for standalone shapes, hide for composite
         if not self._is_composite_shape():
             self.scale_frame.pack(side=tk.TOP, pady=(2, 0))
         else:
             self.scale_frame.pack_forget()
-
-        self.clear_workspace_btn.pack(side=tk.TOP, pady=1)
 
         # Composite-only interaction tips
         if self._is_composite_shape():
@@ -4623,6 +4646,9 @@ class GeometryApp:
         # Delete/Backspace to remove selected shapes or annotations
         self.root.bind_all('<Delete>', lambda e: self._on_delete_shortcut() or "break")
         self.root.bind_all('<BackSpace>', lambda e: self._on_delete_shortcut() or "break")
+
+        # Escape to cancel dim-line placement mode
+        self.root.bind_all('<Escape>', lambda e: self._on_escape_pressed(e) or "break")
         
         # Platform-specific modifiers
         mod = "Command" if platform.system() == "Darwin" else "Control"
