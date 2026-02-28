@@ -5,12 +5,16 @@ import logging
 import tkinter as tk
 import numpy as np
 import matplotlib.patches as patches
+from typing import TYPE_CHECKING
 
 from .models import (
     Point, CompositeDimLine, AppConstants, DrawingContext,
-    TransformState, ShapeConfigProvider,
+    TransformState, ShapeConfigProvider, ShapeConfig,
 )
 from .drawing import DrawingUtilities, GeometricRotation
+
+if TYPE_CHECKING:
+    from .app import GeometryApp
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +34,7 @@ class CompositeDragController:
     delegate methods for all moved methods.
     """
 
-    def __init__(self, app: "GeometryApp") -> None:
+    def __init__(self, app: GeometryApp) -> None:
         self.app = app
         # Shape placement state
         self.positions: dict[int, tuple[float, float]] = {}
@@ -85,10 +89,6 @@ class CompositeDragController:
         except Exception:
             pass
         if event.inaxes != app.ax:
-            # Cancel dim-line placement if user clicks outside the canvas
-            if self.dim_mode is not None:
-                self.cancel_dim_mode()
-                app.generate_plot()
             return
         if not app._is_composite_shape():
             return
@@ -475,15 +475,10 @@ class CompositeDragController:
                         if bbox != (0, 0, 0, 0) and bbox[0] <= mx <= bbox[2] and bbox[1] <= my <= bbox[3]:
                             hit = True; break
                 desired = "fleur" if hit else "arrow"
-                # Never overwrite the crosshair cursor while dim-placement is active
-                if self.dim_mode is not None:
-                    pass  # keep crosshair; don't change cursor during dim mode
-                elif app.root.cget("cursor") != desired:
+                if app.root.cget("cursor") != desired:
                     app.root.config(cursor=desired)
             else:
-                if self.dim_mode is not None:
-                    pass  # keep crosshair even when mouse leaves axes during dim mode
-                elif app.root.cget("cursor") not in ("crosshair", "fleur"):
+                if app.root.cget("cursor") not in ("crosshair", "fleur"):
                     app.root.config(cursor="arrow")
             return
 
@@ -585,8 +580,7 @@ class CompositeDragController:
             is_dim_label = dtype == "dim_label"
             is_dim_body = dtype == "dim_body"
             self.label_drag = None
-            if self.dim_mode is None:
-                app.root.config(cursor="arrow")
+            app.root.config(cursor="arrow")
             if was_drag:
                 app.generate_plot()
                 if not app.history_manager.is_restoring:
@@ -659,8 +653,7 @@ class CompositeDragController:
 
         self.drag_state = None
         self.snap_guides = []
-        if self.dim_mode is None:
-            app.root.config(cursor="arrow")
+        app.root.config(cursor="arrow")
 
         if was_drag:
             app.generate_plot()

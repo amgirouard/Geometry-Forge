@@ -751,14 +751,16 @@ class GeometryApp:
         shortcut_bar.grid(row=3, column=0, sticky="ew")
         shortcut_bar.grid_propagate(False)
         shortcut_bar.pack_propagate(False)
-        shortcut_text = (
+        self.shortcut_bar = shortcut_bar
+        self._shortcut_text = (
             "Reflect [H/V]     •     Rotate [R/L]     •     Undo/Redo [Ctrl+Z/Y]     •     "
             "Save [Ctrl+S]     •     Copy [Ctrl+C]     •     Select / Deselect / Unlink [right-click]"
         )
-        tk.Label(
-            shortcut_bar, text=shortcut_text, bg=AppConstants.BG_COLOR, fg="#555555",
+        self.shortcut_label = tk.Label(
+            shortcut_bar, text="", bg=AppConstants.BG_COLOR, fg="#555555",
             font=AppConstants.BTN_FONT, pady=1
-        ).place(relx=0.5, rely=0.5, anchor="center")
+        )
+        self.shortcut_label.place(relx=0.5, rely=0.5, anchor="center")
     
     def _create_category_selector(self) -> None:
         tk.Label(self.center_container, text="Category:", bg=AppConstants.BG_COLOR, anchor="e").grid(row=0, column=0, sticky="e", padx=(0,2), pady=5)
@@ -1541,15 +1543,15 @@ class GeometryApp:
             logger.debug("Line width spinbox update failed (likely widget destroyed): %s", e)
 
     def show_welcome(self) -> None:
-        # Keep only Category (cols 0,1) and Shape (cols 2,3) visible in top bar
+        # Keep only Category label+combo (cols 0,1) visible — hide Shape and everything else
         if self.center_container is not None:
             for slave in self.center_container.grid_slaves(row=0):
                 col = int(slave.grid_info()["column"])
-                if col <= 3:
+                if col <= 1:
                     slave.grid()
                 else:
                     slave.grid_remove()
-        
+
         # Hide all control columns
         if self.col_shape_type is not None: self.col_shape_type.grid_remove()
         if self.col_transforms is not None: self.col_transforms.grid_remove()
@@ -1557,21 +1559,64 @@ class GeometryApp:
         if self.col_dimlines is not None: self.col_dimlines.grid_remove()
         if self.col_presets is not None: self.col_presets.grid_remove()
         if self.col_tools is not None: self.col_tools.grid_remove()
-        
+
+        # Collapse the controls row and shortcut bar so the canvas fills the window
+        if self.controls_row is not None: self.controls_row.grid_remove()
+        if hasattr(self, "shortcut_bar") and self.shortcut_bar is not None: self.shortcut_bar.grid_remove()
+        # Let the canvas row stretch to fill the freed space
+        self.root.rowconfigure(2, weight=1)
+        if self.col_canvas is not None:
+            self.col_canvas.grid(row=2, column=0, sticky="nsew")
+
+        # Blank the shortcut bar — hints are meaningless before a shape is loaded
+        if hasattr(self, "shortcut_label"):
+            self.shortcut_label.config(text="")
+
         self.ax.clear()
         self.plot_controller.setup_axes()
-        
+
         # Standardized welcome limits
         self.ax.set_xlim(-10, 10)
         self.ax.set_ylim(-8, 8)
-        
-        # Clean, centered welcome with lighter styling
-        self.ax.text(0, 1.0, "Geometry Forge",
-                    ha="center", va="center", fontsize=26, fontweight='bold',
+
+        # Set equal aspect so shapes render without distortion regardless of canvas size
+        self.ax.set_aspect('equal', adjustable='datalim')
+
+        # With equal aspect, use a square-friendly coordinate space
+        self.ax.set_xlim(-8, 8)
+        self.ax.set_ylim(-8, 8)
+
+        lw = 1.8
+        ec = "#333333"
+        fc = "none"
+        s = 0.9   # half-size of each shape (~1/3 of original 2.2)
+        gap = 2.6  # spacing between shape centers
+        cy = -1.8  # vertical center of shapes
+
+        # Title and subtitle — moved down
+        self.ax.text(0, 2.8, "Geometry Forge",
+                    ha="center", va="center", fontsize=26, fontweight="bold",
                     color="#333333", fontfamily="sans-serif")
-        self.ax.text(0, -1.2, "Select a category to begin",
+        self.ax.text(0, 1.9, "Select a category to begin",
                     ha="center", va="center", fontsize=11,
-                    color="#888888", fontfamily="sans-serif")
+                    color="#aaaaaa", fontfamily="sans-serif")
+
+        # Square (left)
+        cy = 0.5
+        square = patches.Rectangle((0 - gap - s, cy - s), s * 2, s * 2,
+                                    linewidth=lw, edgecolor=ec, facecolor=fc)
+        self.ax.add_patch(square)
+
+        # Triangle (center)
+        tri_x = [-s, 0.0, s, -s]
+        tri_y = [cy - s, cy + s, cy - s, cy - s]
+        self.ax.plot(tri_x, tri_y, color=ec, linewidth=lw)
+
+        # Circle (right)
+        circle = patches.Circle((gap, cy), radius=s,
+                                  linewidth=lw, edgecolor=ec, facecolor=fc)
+        self.ax.add_patch(circle)
+
         self.canvas.draw()
 
     def _cancel_after(self, attr_name: str) -> None:
@@ -2200,6 +2245,13 @@ class GeometryApp:
 
     def _rebuild_shape_ui_for_restore(self, shape: str) -> None:
         """Rebuild shape UI during state restoration without triggering captures."""
+        # Restore the controls row and shortcut bar (hidden during welcome screen)
+        if self.controls_row is not None: self.controls_row.grid(row=1, column=0, sticky="ew")
+        if hasattr(self, "shortcut_bar") and self.shortcut_bar is not None: self.shortcut_bar.grid(row=3, column=0, sticky="ew")
+        # Revert canvas row back to fixed size
+        self.root.rowconfigure(2, weight=0)
+        if self.col_canvas is not None:
+            self.col_canvas.grid(row=2, column=0, sticky="")
         # Show control columns
         if self.col_inputs is not None:
             self.col_inputs.grid()
@@ -2245,6 +2297,18 @@ class GeometryApp:
             self._pack_right_panel()
     
     def update_inputs(self, _: Any | None = None) -> None:
+
+        # Restore shortcut bar text now that a shape is active
+        if hasattr(self, "shortcut_label") and hasattr(self, "_shortcut_text"):
+            self.shortcut_label.config(text=self._shortcut_text)
+
+        # Restore the controls row and shortcut bar now that a shape is active
+        if self.controls_row is not None: self.controls_row.grid(row=1, column=0, sticky="ew")
+        if hasattr(self, "shortcut_bar") and self.shortcut_bar is not None: self.shortcut_bar.grid(row=3, column=0, sticky="ew")
+        # Revert canvas row back to fixed size
+        self.root.rowconfigure(2, weight=0)
+        if self.col_canvas is not None:
+            self.col_canvas.grid(row=2, column=0, sticky="")
 
         if self.center_container is not None:
             # Re-show all controls in the top bar
