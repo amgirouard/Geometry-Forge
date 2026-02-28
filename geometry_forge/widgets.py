@@ -53,11 +53,11 @@ class CompositeTransferList(tk.Frame):
 
         tk.Frame(btn_frame, bg=AppConstants.BG_COLOR, height=10).pack(side=tk.TOP)
 
-        self.add_btn = tk.Button(btn_frame, text="→", width=3, font=AppConstants.BTN_FONT,
+        self.add_btn = tk.Button(btn_frame, text="→", width=1, font=AppConstants.BTN_FONT,
                                   command=self._add_selected)
         self.add_btn.pack(side=tk.TOP, pady=2)
 
-        self.remove_btn = tk.Button(btn_frame, text="←", width=3, font=AppConstants.BTN_FONT,
+        self.remove_btn = tk.Button(btn_frame, text="←", width=1, font=AppConstants.BTN_FONT,
                                      command=self._remove_selected)
         self.remove_btn.pack(side=tk.TOP, pady=2)
 
@@ -68,9 +68,9 @@ class CompositeTransferList(tk.Frame):
         tk.Label(dest_outer, text="Selected  ☰ drag to reorder", bg=AppConstants.BG_COLOR,
                  font=("Arial", 8, "bold")).pack(side=tk.TOP)
 
-        self.dest_listbox = tk.Listbox(dest_outer, width=20, height=10,
+        self.dest_listbox = tk.Listbox(dest_outer, width=13, height=10,
                                         selectmode=tk.SINGLE, exportselection=False,
-                                        cursor="fleur")
+                                        cursor="arrow")
         self.dest_listbox.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
         # Drag-to-reorder bindings
@@ -131,7 +131,7 @@ class CompositeTransferList(tk.Frame):
             return
         idx = sel[0]
         shape = self.source_listbox.get(idx)
-        self.dest_listbox.insert(tk.END, shape)
+        self.dest_listbox.insert(tk.END, "☰  " + shape)
         self.source_listbox.selection_set(idx)
         self.on_change_callback(("add", self.dest_listbox.size() - 1))
 
@@ -146,12 +146,10 @@ class CompositeTransferList(tk.Frame):
         self.on_change_callback(("remove", idx))
 
     def get_selected_shapes(self) -> list[str]:
-        return [self.INTERNAL_NAMES.get(self.dest_listbox.get(i), self.dest_listbox.get(i))
+        return [self.INTERNAL_NAMES.get(self.dest_listbox.get(i).removeprefix("☰  "), self.dest_listbox.get(i).removeprefix("☰  "))
                 for i in range(self.dest_listbox.size())]
 
     def set_selected_shapes(self, shapes: list[str]) -> None:
         self.dest_listbox.delete(0, tk.END)
         for s in shapes:
-            self.dest_listbox.insert(tk.END, self.DISPLAY_NAMES.get(s, s))
-
-
+            self.dest_listbox.insert(tk.END, "☰  " + self.DISPLAY_NAMES.get(s, s))

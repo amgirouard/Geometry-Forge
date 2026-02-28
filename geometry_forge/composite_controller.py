@@ -84,7 +84,7 @@ class CompositeDragController:
             app.canvas.get_tk_widget().focus_set()
         except Exception:
             pass
-        if event.inaxes != app.ax or event.button != 1:
+        if event.inaxes != app.ax:
             return
         if not app._is_composite_shape():
             return
@@ -92,6 +92,47 @@ class CompositeDragController:
             return
         mx, my = event.xdata, event.ydata
         if mx is None or my is None:
+            return
+
+        # Right-click on a dim line → toggle shape_owner on/off.
+        # Unlinks an owned line so it won't move with its shape (and won't be
+        # deleted with it). Right-clicking an unowned line while exactly one
+        # shape is selected re-links it to that shape.
+        if event.button == 3:
+            # Right-click a dim line → toggle ownership
+            hit_idx = self._hit_test_dim_line(mx, my, app)
+            if hit_idx is not None:
+                dim = self.dim_lines[hit_idx]
+                if dim.get("shape_owner") is not None:
+                    dim["shape_owner"] = None   # unlink
+                    dim.pop("preset_key", None)  # no longer auto-snaps
+                    # Clear selection so the line immediately loses its blue
+                    # highlight — makes it visually obvious it's now free.
+                    self.selected_dim = None
+                elif len(self.selected) == 1:
+                    dim["shape_owner"] = next(iter(self.selected))  # re-link
+                    self.selected_dim = hit_idx  # confirm re-link with highlight
+                app.generate_plot()
+                if not app.history_manager.is_restoring:
+                    app._capture_current_state()
+                return
+            # Right-click a shape → toggle it in/out of the current selection
+            # (mirrors how right-clicking lines toggles ownership, and how
+            # Ctrl+click works for left-click multi-select)
+            if app._composite_bboxes:
+                for idx in reversed(range(len(app._composite_bboxes))):
+                    bbox = app._composite_bboxes[idx]
+                    if bbox != (0, 0, 0, 0) and bbox[0] <= mx <= bbox[2] and bbox[1] <= my <= bbox[3]:
+                        if idx in self.selected:
+                            self.selected.discard(idx)
+                        else:
+                            self.selected.add(idx)
+                        self.update_selection_ui()
+                        app.generate_plot()
+                        return
+            return
+
+        if event.button != 1:
             return
 
         # Double-click → enter edit mode
@@ -236,25 +277,32 @@ class CompositeDragController:
 
                 orig_labels = []
                 orig_dims = []
+
+                # Collect dim lines by ownership so offset/user-dragged lines
+                # always travel with their shape, regardless of position.
+                owned_dim_idxs = [
+                    i for i, d in enumerate(self.dim_lines)
+                    if d.get("shape_owner") in self.selected
+                ]
+                orig_dims = [
+                    (i, self.dim_lines[i]["x1"], self.dim_lines[i]["y1"],
+                     self.dim_lines[i]["x2"], self.dim_lines[i]["y2"],
+                     self.dim_lines[i].get("label_x"), self.dim_lines[i].get("label_y"))
+                    for i in owned_dim_idxs
+                ]
+
+                # Labels don't have ownership yet — use spatial fallback
                 if len(self.selected) > 1:
                     all_sel = self.all_shapes_selected()
                     grp_bb = self.get_group_bbox()
                     if grp_bb != (0, 0, 0, 0):
-                        lbl_idxs, dim_idxs = self.get_annotations_in_region(*grp_bb, include_all=all_sel)
+                        lbl_idxs, _ = self.get_annotations_in_region(*grp_bb, include_all=all_sel)
                         orig_labels = [(i, self.labels[i]["x"], self.labels[i]["y"]) for i in lbl_idxs]
-                        orig_dims = [(i, self.dim_lines[i]["x1"], self.dim_lines[i]["y1"],
-                                      self.dim_lines[i]["x2"], self.dim_lines[i]["y2"],
-                                      self.dim_lines[i].get("label_x"), self.dim_lines[i].get("label_y"))
-                                     for i in dim_idxs]
                 elif idx < len(app._composite_bboxes):
                     s_bbox = app._composite_bboxes[idx]
                     if s_bbox != (0, 0, 0, 0):
-                        lbl_idxs, dim_idxs = self.get_annotations_in_region(*s_bbox)
+                        lbl_idxs, _ = self.get_annotations_in_region(*s_bbox)
                         orig_labels = [(i, self.labels[i]["x"], self.labels[i]["y"]) for i in lbl_idxs]
-                        orig_dims = [(i, self.dim_lines[i]["x1"], self.dim_lines[i]["y1"],
-                                      self.dim_lines[i]["x2"], self.dim_lines[i]["y2"],
-                                      self.dim_lines[i].get("label_x"), self.dim_lines[i].get("label_y"))
-                                     for i in dim_idxs]
 
                 self.drag_state = {
                     "idx": idx,
@@ -314,6 +362,8 @@ class CompositeDragController:
                         dim["x1"], dim["y1"] = new_x, new_y
                     elif ep == "p2":
                         dim["x2"], dim["y2"] = new_x, new_y
+                    # Mark as user-dragged so the re-snap loop doesn't overwrite position
+                    dim["user_dragged"] = True
                     app.generate_plot()
             elif dtype == "dim_label":
                 if idx < len(self.dim_lines):
@@ -330,6 +380,8 @@ class CompositeDragController:
                     if "label_x" in dim and "label_y" in dim:
                         dim["label_x"] = drag["orig_lx"] + dx
                         dim["label_y"] = drag["orig_ly"] + dy
+                    # Mark as user-dragged so the re-snap loop doesn't overwrite position
+                    dim["user_dragged"] = True
                     app.generate_plot()
             else:
                 if idx < len(self.labels):
@@ -743,6 +795,38 @@ class CompositeDragController:
         pad = 0.5
         return (min(x_mins) - pad, min(y_mins) - pad, max(x_maxs) + pad, max(y_maxs) + pad)
 
+    def _hit_test_dim_line(self, mx: float, my: float, app) -> "int | None":
+        """Return the index of the dim line nearest to (mx, my), or None."""
+        hit_radius = max((app.ax.get_xlim()[1] - app.ax.get_xlim()[0]) * 0.015, 0.2)
+        # Check label bboxes first (easiest to click)
+        if app._composite_dim_label_bboxes is not None:
+            for idx in reversed(range(len(app._composite_dim_label_bboxes))):
+                bbox = app._composite_dim_label_bboxes[idx]
+                if bbox[0] <= mx <= bbox[2] and bbox[1] <= my <= bbox[3]:
+                    return idx
+        # Check endpoints
+        if app._composite_dim_endpoints is not None:
+            for idx, endpoints in enumerate(app._composite_dim_endpoints):
+                for ep_key in ("p1", "p2"):
+                    if ep_key not in endpoints:
+                        continue
+                    ex, ey = endpoints[ep_key]
+                    if abs(mx - ex) < hit_radius and abs(my - ey) < hit_radius:
+                        return idx
+        # Check line body
+        for idx in reversed(range(len(self.dim_lines))):
+            dim = self.dim_lines[idx]
+            x1, y1, x2, y2 = dim["x1"], dim["y1"], dim["x2"], dim["y2"]
+            ddx, ddy = x2 - x1, y2 - y1
+            seg_len_sq = ddx*ddx + ddy*ddy
+            if seg_len_sq == 0:
+                continue
+            t = max(0.0, min(1.0, ((mx - x1)*ddx + (my - y1)*ddy) / seg_len_sq))
+            dist = math.sqrt((mx - (x1 + t*ddx))**2 + (my - (y1 + t*ddy))**2)
+            if dist < hit_radius and 0.05 < t < 0.95:
+                return idx
+        return None
+
     def all_shapes_selected(self) -> bool:
         """Check if every shape in the composite is selected."""
         app = self.app
@@ -894,11 +978,16 @@ class CompositeDragController:
                 defaults = {"height": "h", "width": "w", "radius": "r", "free": "d"}
                 text = defaults.get(mode, "d")
             mid_x = (x1 + x2) / 2; mid_y = (y1 + y2) / 2
+            # Auto-assign shape_owner when exactly one shape is selected.
+            # This ensures manually drawn lines around a shape travel with it
+            # (and are deleted with it) just like preset lines.
+            auto_owner = next(iter(self.selected)) if len(self.selected) == 1 else None
             self.dim_lines.append({
                 "x1": x1, "y1": y1, "x2": x2, "y2": y2,
                 "text": text,
                 "constraint": mode if mode != "free" else None,
-                "label_x": mid_x, "label_y": mid_y
+                "label_x": mid_x, "label_y": mid_y,
+                "shape_owner": auto_owner,
             })
             if app._composite_label_entry is not None:
                 app._composite_label_entry.delete(0, tk.END)
@@ -1288,7 +1377,14 @@ class CompositeDragController:
             # Clean up stale entries
             self.positions = {k: v for k, v in self.positions.items() if k < n}
             self.transforms = {k: v for k, v in self.transforms.items() if k < n}
-            self.selected.clear()
+
+            # Auto-select newly added shape so presets and toolbar reflect it immediately.
+            # For all other operations (remove, swap, bulk restore) clear selection as before.
+            if operation is not None and operation[0] == "add":
+                self.selected = {operation[1]}
+            else:
+                self.selected.clear()
+            self.update_selection_ui()
             app._composite_view_limits = None  # Force view recalculation
 
         app.generate_plot()

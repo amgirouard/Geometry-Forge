@@ -168,7 +168,7 @@ class AppConstants:
 
     # Window layout — all heights in pixels; width is determined at runtime by
     # the menu bar's natural rendered width and never hardcoded.
-    CONTROLS_HEIGHT: int = 155            # Fixed height for controls row (sized for triangle — tallest shape)
+    CONTROLS_HEIGHT: int = 170           # Fixed height for controls row (sized for triangle — tallest shape)
     TOP_BAR_HEIGHT: int = 46              # Category/Shape/Font selector bar
     SHORTCUT_BAR_HEIGHT: int = 24         # Keyboard shortcut hint bar
     CANVAS_PAPER_MARGIN: float = 0.04    # Grey border around white paper (fraction of figure)

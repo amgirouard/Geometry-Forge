@@ -394,6 +394,7 @@ class GeometryApp:
             "label_x": endpoints["label_x"],
             "label_y": endpoints["label_y"],
             "shape_owner": sel_idx,  # tied to this shape; free lines have no owner
+            "preset_key": preset_key,  # stored so render loop can live-re-snap coords
         })
         ctrl.selected_dim = len(ctrl.dim_lines) - 1
         ctrl.selected_label = None
@@ -746,7 +747,7 @@ class GeometryApp:
         shortcut_bar.pack_propagate(False)
         shortcut_text = (
             "Reflect [H/V]     •     Rotate [R/L]     •     Undo/Redo [Ctrl+Z/Y]     •     "
-            "Save [Ctrl+S]     •     Copy [Ctrl+C]"
+            "Save [Ctrl+S]     •     Copy [Ctrl+C]     •     Select / Deselect / Unlink [right-click]"
         )
         tk.Label(
             shortcut_bar, text=shortcut_text, bg=AppConstants.BG_COLOR, fg="#555555",
@@ -2447,7 +2448,9 @@ class GeometryApp:
                      font=("Arial", 8, "italic"), fg="#888888").pack(side=tk.TOP, anchor="w", padx=4)
             return
         shape_name = selected_shapes[sel_idx]
-        presets = preset_defs.get(shape_name, [])
+        # Circumference is a special arc toggle in standalone mode, not a placeable
+        # dim line — exclude it from composite presets to avoid falling back to free mode.
+        presets = [p for p in preset_defs.get(shape_name, []) if p["key"] != "circumference"]
         if not presets:
             tk.Label(frame, text=f"(no presets for {shape_name})", bg=AppConstants.BG_COLOR,
                      font=("Arial", 8, "italic"), fg="#888888").pack(side=tk.TOP, anchor="w", padx=4)
@@ -2528,36 +2531,9 @@ class GeometryApp:
         tk.Label(self.col_dimlines, text="Presets", bg=AppConstants.BG_COLOR,
                  font=("Arial", 8, "bold")).pack(side=tk.TOP, anchor="w", pady=(4, 0), padx=2)
 
-        self._composite_preset_defs = {
-            "Rectangle":         [{"key": "height",      "label": "Width",    "default_text": "w"},
-                                   {"key": "width",       "label": "Length",   "default_text": "l"}],
-            "Square":            [{"key": "side_v",      "label": "Side V",   "default_text": "s"},
-                                   {"key": "side_h",      "label": "Side H",   "default_text": "s"}],
-            "Tri Triangle":      [{"key": "height",      "label": "Height",   "default_text": "h"},
-                                   {"key": "width",       "label": "Base",     "default_text": "b"},
-                                   {"key": "side_l",      "label": "Side L",   "default_text": "l"},
-                                   {"key": "side_r",      "label": "Side R",   "default_text": "r"}],
-            "Parallelogram":     [{"key": "para_height", "label": "Height",   "default_text": "h"},
-                                   {"key": "para_base",   "label": "Base",     "default_text": "b"},
-                                   {"key": "para_top",    "label": "Top",      "default_text": "t"},
-                                   {"key": "para_side_l", "label": "Side L",   "default_text": "l"},
-                                   {"key": "para_side_r", "label": "Side R",   "default_text": "r"}],
-            "Trapezoid":         [{"key": "trap_height", "label": "Height",   "default_text": "h"},
-                                   {"key": "trap_base",   "label": "Base",     "default_text": "b"},
-                                   {"key": "trap_top",    "label": "Top",      "default_text": "t"},
-                                   {"key": "trap_side_l", "label": "Side L",   "default_text": "l"},
-                                   {"key": "trap_side_r", "label": "Side R",   "default_text": "r"}],
-            "Polygon":           [{"key": "side",        "label": "Side",     "default_text": "s"}],
-            "Rectangular Prism": [{"key": "height",      "label": "Height",   "default_text": "h"},
-                                   {"key": "length",      "label": "Length",   "default_text": "l"},
-                                   {"key": "width",       "label": "Width",    "default_text": "w"}],
-            "Triangular Prism":  [{"key": "height",      "label": "Height",   "default_text": "h"},
-                                   {"key": "tri_base",    "label": "Base",     "default_text": "b"},
-                                   {"key": "tri_length",  "label": "Length",   "default_text": "l"}],
-            "Tri Prism":         [{"key": "height",      "label": "Height",   "default_text": "h"},
-                                   {"key": "tri_base",    "label": "Base",     "default_text": "b"},
-                                   {"key": "tri_length",  "label": "Length",   "default_text": "l"}],
-        }
+        # Use the same preset definitions as standalone mode so composite and
+        # standalone always stay in sync — no separate list to maintain.
+        self._composite_preset_defs = self._DIM_PRESETS
 
         preset_outer = tk.Frame(self.col_dimlines, bg=AppConstants.BG_COLOR)
         preset_outer.pack(side=tk.TOP, fill=tk.X)
@@ -2927,21 +2903,108 @@ class GeometryApp:
                     else: th[k] = v
                 self._composite_geometry_hints[i] = th
         
-        # Draw selection highlight around all selected shapes
+        # Draw selection highlight by tracing the shape's own geometry.
+        # We redraw each patch/line of the selected shape in blue so that
+        # a triangle shows a blue triangle, a circle shows a blue circle, etc.
         for sel_idx in self._composite_selected:
-            if sel_idx < len(self._composite_bboxes):
-                sel_bbox = self._composite_bboxes[sel_idx]
-                if sel_bbox != (0, 0, 0, 0):
-                    pad = 0.8
-                    sel_rect = patches.FancyBboxPatch(
-                        (sel_bbox[0] - pad, sel_bbox[1] - pad),
-                        sel_bbox[2] - sel_bbox[0] + 2 * pad,
-                        sel_bbox[3] - sel_bbox[1] + 2 * pad,
-                        boxstyle="round,pad=0.2",
-                        edgecolor="#4488ff", facecolor="none",
-                        linewidth=1.5, linestyle="--", alpha=0.7, zorder=15
-                    )
-                    self.ax.add_patch(sel_rect)
+            if sel_idx >= len(shape_data_list):
+                continue
+            sdata = shape_data_list[sel_idx]
+            if sdata.get("error"):
+                continue
+            sel_bbox = self._composite_bboxes[sel_idx] if sel_idx < len(self._composite_bboxes) else (0,0,0,0)
+            if sel_bbox == (0, 0, 0, 0):
+                continue
+
+            HL_COLOR  = "#4488ff"
+            HL_LW     = 2.0
+            HL_ALPHA  = 0.55
+            HL_ZORDER = 15
+            DIM_COLOR = "#aaaaaa"  # grey to recede behind the blue overlay
+
+            # Dim the original shape's edges so the blue overlay stands out clearly
+            for p in sdata["patches"]:
+                try:
+                    if hasattr(p, 'set_edgecolor'):
+                        p.set_edgecolor(DIM_COLOR)
+                except Exception:
+                    pass
+            for line in sdata["lines"]:
+                try:
+                    if len(line.get_xdata()) >= 2:
+                        line.set_color(DIM_COLOR)
+                except Exception:
+                    pass
+
+            # Highlight patches (Polygon, Ellipse, Circle, Arc, Wedge, Rectangle …)
+            for p in sdata["patches"]:
+                cls = type(p).__name__
+                try:
+                    if cls == "Polygon":
+                        xy = p.get_xy().copy()
+                        h = patches.Polygon(xy, closed=p.get_closed(),
+                                            edgecolor=HL_COLOR, facecolor="none",
+                                            linewidth=HL_LW, linestyle="--",
+                                            alpha=HL_ALPHA, zorder=HL_ZORDER)
+                        self.ax.add_patch(h)
+                    elif cls in ("Ellipse", "Circle"):
+                        cx, cy = p.center
+                        h = patches.Ellipse((cx, cy), p.width, p.height,
+                                            angle=getattr(p, 'angle', 0),
+                                            edgecolor=HL_COLOR, facecolor="none",
+                                            linewidth=HL_LW, linestyle="--",
+                                            alpha=HL_ALPHA, zorder=HL_ZORDER)
+                        self.ax.add_patch(h)
+                    elif cls == "Arc":
+                        cx, cy = p.center
+                        h = patches.Arc((cx, cy), p.width, p.height,
+                                        angle=getattr(p, 'angle', 0),
+                                        theta1=p.theta1, theta2=p.theta2,
+                                        edgecolor=HL_COLOR, facecolor="none",
+                                        linewidth=HL_LW, linestyle="--",
+                                        alpha=HL_ALPHA, zorder=HL_ZORDER)
+                        self.ax.add_patch(h)
+                    elif cls == "Wedge":
+                        cx, cy = p.center
+                        h = patches.Wedge((cx, cy), p.r,
+                                          p.theta1, p.theta2,
+                                          width=p.width if p.width != p.r else None,
+                                          edgecolor=HL_COLOR, facecolor="none",
+                                          linewidth=HL_LW, linestyle="--",
+                                          alpha=HL_ALPHA, zorder=HL_ZORDER)
+                        self.ax.add_patch(h)
+                    elif cls in ("Rectangle", "FancyBboxPatch"):
+                        x, y = p.get_xy()
+                        h = patches.Rectangle((x, y), p.get_width(), p.get_height(),
+                                              edgecolor=HL_COLOR, facecolor="none",
+                                              linewidth=HL_LW, linestyle="--",
+                                              alpha=HL_ALPHA, zorder=HL_ZORDER)
+                        self.ax.add_patch(h)
+                    else:
+                        # Generic fallback: try Polygon from get_xy
+                        if hasattr(p, 'get_xy'):
+                            xy = p.get_xy().copy()
+                            h = patches.Polygon(xy, closed=False,
+                                                edgecolor=HL_COLOR, facecolor="none",
+                                                linewidth=HL_LW, linestyle="--",
+                                                alpha=HL_ALPHA, zorder=HL_ZORDER)
+                            self.ax.add_patch(h)
+                except Exception:
+                    pass  # Never let a highlight error break the render
+
+            # Highlight Line2D artists (used by cones, prisms, 3D shapes, etc.)
+            for line in sdata["lines"]:
+                try:
+                    xd = line.get_xdata()
+                    yd = line.get_ydata()
+                    # Skip tiny marker dots and single-point lines
+                    if len(xd) < 2:
+                        continue
+                    self.ax.plot(xd, yd,
+                                 color=HL_COLOR, linewidth=HL_LW,
+                                 linestyle="--", alpha=HL_ALPHA, zorder=HL_ZORDER)
+                except Exception:
+                    pass
         
         # Phase 4: Set view — use fixed page-like limits for consistent canvas
         # Calculate bounds that encompass all shapes including drag offsets
@@ -3006,28 +3069,32 @@ class GeometryApp:
             # Cache for drag stability
             self._composite_view_limits = (vx_min, vx_max, vy_min, vy_max)
         
-        # Determine which annotations are "in group" for visual feedback.
-        # Works for both single-shape selection (highlight annotations within that
-        # shape's bbox) and multi-shape groups (highlight annotations within the
-        # combined bbox).  This makes it clear which labels/dim lines belong to
-        # the selected shape(s) and will move if a transform is applied.
+        # Determine which annotations are "in group" for visual feedback using
+        # ownership (shape_owner) rather than spatial proximity.  This correctly
+        # highlights preset and free dim lines that are offset outside the shape
+        # bbox, and makes it visually clear what will move/delete with each shape.
         _annotations_in_group = set()
         _dim_lines_in_group = set()
-        if len(self._composite_selected) == 1:
-            sel_idx = next(iter(self._composite_selected))
-            if sel_idx < len(self._composite_bboxes):
-                s_bb = self._composite_bboxes[sel_idx]
-                if s_bb != (0, 0, 0, 0):
-                    in_lbl, in_dim = self._get_annotations_in_region(*s_bb)
+        if self._composite_selected:
+            # Dim lines: highlight any whose shape_owner is one of the selected shapes
+            for i, dim in enumerate(self._composite_dim_lines):
+                owner = dim.get("shape_owner")
+                if owner in self._composite_selected:
+                    _dim_lines_in_group.add(i)
+            # Labels: ownership not yet tracked, fall back to spatial region
+            if len(self._composite_selected) == 1:
+                sel_idx = next(iter(self._composite_selected))
+                if sel_idx < len(self._composite_bboxes):
+                    s_bb = self._composite_bboxes[sel_idx]
+                    if s_bb != (0, 0, 0, 0):
+                        in_lbl, _ = self._get_annotations_in_region(*s_bb)
+                        _annotations_in_group = set(in_lbl)
+            elif len(self._composite_selected) > 1:
+                group_bb = self._get_group_bbox()
+                if group_bb != (0, 0, 0, 0):
+                    all_sel = self._all_shapes_selected()
+                    in_lbl, _ = self._get_annotations_in_region(*group_bb, include_all=all_sel)
                     _annotations_in_group = set(in_lbl)
-                    _dim_lines_in_group = set(in_dim)
-        elif len(self._composite_selected) > 1:
-            group_bb = self._get_group_bbox()
-            if group_bb != (0, 0, 0, 0):
-                all_sel = self._all_shapes_selected()
-                in_lbl, in_dim = self._get_annotations_in_region(*group_bb, include_all=all_sel)
-                _annotations_in_group = set(in_lbl)
-                _dim_lines_in_group = set(in_dim)
         
         # Phase 5: Draw composite labels
         self._composite_label_bboxes = []
@@ -3077,7 +3144,54 @@ class GeometryApp:
             in_group = (i in _dim_lines_in_group)
             color = "#0066cc" if (is_selected or in_group) else "black"
             lw = 1.5 if (is_selected or in_group) else AppConstants.DIMENSION_LINE_WIDTH
-            
+
+            # Live re-snap preset dim lines to follow their owner shape's current position.
+            # This mirrors the standalone logic and handles the case where shapes are
+            # deleted/reordered and positions are recalculated by the grid layout.
+            preset_key = dim.get("preset_key")
+            owner_idx = dim.get("shape_owner")
+            suppress_snap = getattr(self, '_suppress_preset_dim_snap', False)
+            if (preset_key and not dim.get("user_dragged") and not suppress_snap
+                    and owner_idx is not None
+                    and owner_idx < len(self._composite_bboxes)):
+                owner_bbox = self._composite_bboxes[owner_idx]
+                if owner_bbox != (0, 0, 0, 0):
+                    x_min, y_min, x_max, y_max = owner_bbox
+                    saved_bounds = self._shape_bounds
+                    saved_hints = dict(self.label_manager.geometry_hints)
+                    saved_xlim = self.ax.get_xlim()
+                    saved_ylim = self.ax.get_ylim()
+                    try:
+                        self._shape_bounds = {
+                            "x_min": x_min, "x_max": x_max,
+                            "y_min": y_min, "y_max": y_max,
+                        }
+                        shape_hints = self._composite_geometry_hints.get(owner_idx, {})
+                        self.label_manager.geometry_hints.clear()
+                        self.label_manager.geometry_hints.update(shape_hints)
+                        pad = max((x_max - x_min), (y_max - y_min)) * 0.15 or 0.5
+                        self.ax.set_xlim(x_min - pad, x_max + pad)
+                        self.ax.set_ylim(y_min - pad, y_max + pad)
+                        fresh = self._calc_dim_line_endpoints(preset_key)
+                    finally:
+                        self._shape_bounds = saved_bounds
+                        self.label_manager.geometry_hints.clear()
+                        self.label_manager.geometry_hints.update(saved_hints)
+                        self.ax.set_xlim(*saved_xlim)
+                        self.ax.set_ylim(*saved_ylim)
+                    if fresh:
+                        # Preserve any label drag offset relative to the old midpoint
+                        old_mx = (dim["x1"] + dim["x2"]) / 2
+                        old_my = (dim["y1"] + dim["y2"]) / 2
+                        lbl_dx = dim.get("label_x", old_mx) - old_mx
+                        lbl_dy = dim.get("label_y", old_my) - old_my
+                        dim["x1"], dim["y1"] = fresh["x1"], fresh["y1"]
+                        dim["x2"], dim["y2"] = fresh["x2"], fresh["y2"]
+                        new_mx = (fresh["x1"] + fresh["x2"]) / 2
+                        new_my = (fresh["y1"] + fresh["y2"]) / 2
+                        dim["label_x"] = new_mx + lbl_dx
+                        dim["label_y"] = new_my + lbl_dy
+
             x1, y1, x2, y2 = dim["x1"], dim["y1"], dim["x2"], dim["y2"]
             
             # Draw dashed dimension line
@@ -4475,6 +4589,23 @@ class GeometryApp:
             self.scale_frame.pack_forget()
 
         self.clear_workspace_btn.pack(side=tk.TOP, pady=1)
+
+        # Composite-only interaction tips
+        if self._is_composite_shape():
+            tips_frame = tk.Frame(self.col_tools, bg=AppConstants.BG_COLOR)
+            tips_frame.pack(side=tk.TOP, fill=tk.X, pady=(6, 0))
+            tk.Frame(tips_frame, bg="#cccccc", height=1).pack(fill=tk.X, pady=(0, 4))
+            tips = [
+                "Drag shape  →  moves with lines",
+                "Drag line body  →  reposition",
+                "Drag endpoint  →  resize",
+                "Double-click label  →  edit",
+                "Del  →  delete selected",
+            ]
+            for tip in tips:
+                tk.Label(tips_frame, text=tip, bg=AppConstants.BG_COLOR,
+                         fg="#666666", font=("Arial", 8), anchor="w",
+                         justify=tk.LEFT).pack(fill=tk.X, padx=2)
 
     
     def _bind_shortcuts(self) -> None:
