@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import math
-from typing import Any, TypedDict
+from typing import Any, TypedDict, TYPE_CHECKING
 from dataclasses import dataclass, field
 from enum import Enum, StrEnum
 
+if TYPE_CHECKING:
+    from matplotlib.axes import Axes
+    from .labels import LabelManager
 
 # Type aliases for geometry primitives
 Point = tuple[float, float]
@@ -165,10 +168,10 @@ class AppConstants:
 
     # Window layout — all heights in pixels; width is determined at runtime by
     # the menu bar's natural rendered width and never hardcoded.
-    CONTROLS_HEIGHT: int = 130            # Fixed height for controls row (sized for triangle — tallest shape)
+    CONTROLS_HEIGHT: int = 155            # Fixed height for controls row (sized for triangle — tallest shape)
     TOP_BAR_HEIGHT: int = 46              # Category/Shape/Font selector bar
     SHORTCUT_BAR_HEIGHT: int = 24         # Keyboard shortcut hint bar
-    CANVAS_PAPER_MARGIN: float = 0.03    # Grey border around white paper (fraction of figure)
+    CANVAS_PAPER_MARGIN: float = 0.04    # Grey border around white paper (fraction of figure)
 
     # All built-in dimension label keys that support selection, drag, and double-click edit.
     # Used in _on_canvas_press to distinguish built-in labels from freeform annotations.

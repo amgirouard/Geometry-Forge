@@ -68,7 +68,7 @@ class CompositeTransferList(tk.Frame):
         tk.Label(dest_outer, text="Selected  ☰ drag to reorder", bg=AppConstants.BG_COLOR,
                  font=("Arial", 8, "bold")).pack(side=tk.TOP)
 
-        self.dest_listbox = tk.Listbox(dest_outer, width=20, height=5,
+        self.dest_listbox = tk.Listbox(dest_outer, width=20, height=10,
                                         selectmode=tk.SINGLE, exportselection=False,
                                         cursor="fleur")
         self.dest_listbox.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
