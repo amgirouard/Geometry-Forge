@@ -638,13 +638,8 @@ class GeometryApp:
         self._canvas_target_w = canvas_w
         self._canvas_target_h = canvas_h
 
-        # Apply size-10 font globally to all ttk widgets and unlabelled tk widgets
-        _style = ttk.Style()
-        _style.configure(".", font=("Arial", 10))
-        _style.configure("TCombobox", font=("Arial", 10))
-        _style.configure("TSpinbox", font=("Arial", 10))
-        _style.configure("TEntry", font=("Arial", 10))
-        self.root.option_add("*Font", ("Arial", 10))
+        # Apply scaled font globally to all ttk/tk widgets
+        self._apply_global_fonts()
 
         # Root grid: 4 rows, 1 column
         self.root.rowconfigure(0, weight=0)  # top bar
@@ -659,9 +654,9 @@ class GeometryApp:
         self._create_shortcut_bar()
     
     def _create_top_bar(self) -> None:
-        """Create the top bar — fixed height, never resizes regardless of content."""
+        """Create the top bar — fixed height, content cannot push it taller."""
         top_bar = tk.Frame(self.root, bg=AppConstants.BG_COLOR,
-                           height=AppConstants.TOP_BAR_HEIGHT)
+                           height=AppConstants.scaled_top_bar_height())
         top_bar.grid(row=0, column=0, sticky="ew")
         top_bar.grid_propagate(False)   # ← content cannot push this taller
         top_bar.pack_propagate(False)
@@ -676,9 +671,9 @@ class GeometryApp:
         self._create_font_selector()
     
     def _create_controls_row(self) -> None:
-        """Create the 5-column controls row — fixed height, never resizes regardless of content."""
+        """Create the 5-column controls row — fixed height, content cannot push it taller."""
         controls = tk.Frame(self.root, bg=AppConstants.BG_COLOR,
-                            height=AppConstants.CONTROLS_HEIGHT)
+                            height=AppConstants.scaled_controls_height())
         controls.grid(row=1, column=0, sticky="ew")
         controls.grid_propagate(False)   # ← content cannot push this taller
         controls.pack_propagate(False)
@@ -703,7 +698,7 @@ class GeometryApp:
         
         self.options_header = tk.Label(
             self.col_transforms, text="Options", bg=AppConstants.BG_COLOR,
-            font=AppConstants.HEADER_FONT
+            font=AppConstants.scaled_header_font()
         )
         self._create_transform_controls()
         self.adjust_sliders_frame = tk.Frame(self.col_transforms, bg=AppConstants.BG_COLOR)
@@ -735,7 +730,7 @@ class GeometryApp:
         self._create_right_tools_panel()
     
     def _create_canvas_area(self) -> None:
-        """Create the canvas frame — fixed size, 5:4 ratio, never resizes."""
+        """Create the canvas frame — initial size set here; resized proportionally on window resize."""
         canvas_w = self._canvas_target_w
         canvas_h = self._canvas_target_h
         self.col_canvas = tk.Frame(self.root, bg=AppConstants.CANVAS_BG_COLOR,
@@ -745,9 +740,9 @@ class GeometryApp:
         self.col_canvas.pack_propagate(False)
     
     def _create_shortcut_bar(self) -> None:
-        """Create the keyboard shortcut hint bar — fixed height, never resizes."""
+        """Create the keyboard shortcut hint bar — fixed height, content cannot push it taller."""
         shortcut_bar = tk.Frame(self.root, bg=AppConstants.BG_COLOR,
-                                height=AppConstants.SHORTCUT_BAR_HEIGHT)
+                                height=AppConstants.scaled_shortcut_bar_height())
         shortcut_bar.grid(row=3, column=0, sticky="ew")
         shortcut_bar.grid_propagate(False)
         shortcut_bar.pack_propagate(False)
@@ -758,7 +753,7 @@ class GeometryApp:
         )
         self.shortcut_label = tk.Label(
             shortcut_bar, text="", bg=AppConstants.BG_COLOR, fg="#555555",
-            font=AppConstants.BTN_FONT, pady=1
+            font=AppConstants.scaled_btn_font(), pady=1
         )
         self.shortcut_label.place(relx=0.5, rely=0.5, anchor="center")
     
@@ -794,7 +789,7 @@ class GeometryApp:
 
         self._font_family = AppConstants.DEFAULT_FONT_FAMILY
         self.font_sans_btn = tk.Button(
-            self.center_container, text="Aa", font=AppConstants.BTN_FONT,
+            self.center_container, text="Aa", font=AppConstants.scaled_btn_font(),
             relief=tk.SUNKEN, bg=AppConstants.ACTIVE_BUTTON_COLOR,
             command=self._set_font_sans
         )
@@ -821,11 +816,11 @@ class GeometryApp:
 
     def _setup_options_panel(self) -> None:
         """Create Save/Copy buttons in the top bar."""
-        self.save_btn = tk.Button(self.center_container, text="Save", font=AppConstants.BTN_FONT, command=self.save_image)
+        self.save_btn = tk.Button(self.center_container, text="Save", font=AppConstants.scaled_btn_font(), command=self.save_image)
         self.save_btn.grid(row=0, column=10, padx=1, sticky="e")
         self.save_btn.grid_remove()
 
-        self.copy_btn = tk.Button(self.center_container, text="Copy", font=AppConstants.BTN_FONT, command=self.copy_to_clipboard)
+        self.copy_btn = tk.Button(self.center_container, text="Copy", font=AppConstants.scaled_btn_font(), command=self.copy_to_clipboard)
         self.copy_btn.grid(row=0, column=11, padx=1, sticky="e")
         self.copy_btn.grid_remove()
     
@@ -842,11 +837,11 @@ class GeometryApp:
         
         self.flip_label = tk.Label(self.flip_row, text="Reflect:", bg=AppConstants.BG_COLOR, anchor="e")
         self.flip_h_btn = tk.Button(
-            self.flip_row, text="↔", height=1, font=("Arial", 10),
+            self.flip_row, text="↔", height=1, font=AppConstants.scaled_btn_font(),
             command=lambda: self._flip_with_annotations('h')
         )
         self.flip_v_btn = tk.Button(
-            self.flip_row, text="↕", height=1, font=("Arial", 10),
+            self.flip_row, text="↕", height=1, font=AppConstants.scaled_btn_font(),
             command=lambda: self._flip_with_annotations('v')
         )
         self.flip_label.grid(row=0, column=0, padx=(0, 5), sticky="e")
@@ -861,11 +856,11 @@ class GeometryApp:
         
         self.rotate_label = tk.Label(self.rotate_row, text="Rotate:", bg=AppConstants.BG_COLOR, anchor="e")
         self.rotate_ccw_btn = tk.Button(
-            self.rotate_row, text="↺", height=1, font=("Arial", 10),
+            self.rotate_row, text="↺", height=1, font=AppConstants.scaled_btn_font(),
             command=lambda: self._on_rotate_click(-1)
         )
         self.rotate_cw_btn = tk.Button(
-            self.rotate_row, text="↻", height=1, font=("Arial", 10),
+            self.rotate_row, text="↻", height=1, font=AppConstants.scaled_btn_font(),
             command=lambda: self._on_rotate_click(1)
         )
         
@@ -883,26 +878,26 @@ class GeometryApp:
         
         self.tools_header = tk.Label(
             self.right_panel_frame, text="Tools", bg=AppConstants.BG_COLOR,
-            font=AppConstants.HEADER_FONT
+            font=AppConstants.scaled_header_font()
         )
         
         # Undo/Redo
         self.undo_redo_frame = tk.Frame(self.right_panel_frame, bg=AppConstants.BG_COLOR)
         self.undo_redo_frame.columnconfigure(0, weight=1)
         self.undo_redo_frame.columnconfigure(1, weight=1)
-        self.undo_btn = tk.Button(self.undo_redo_frame, text="Undo", font=AppConstants.BTN_FONT, pady=0, bd=1, state="disabled", command=self._undo_action)
-        self.redo_btn = tk.Button(self.undo_redo_frame, text="Redo", font=AppConstants.BTN_FONT, pady=0, bd=1, state="disabled", command=self._redo_action)
+        self.undo_btn = tk.Button(self.undo_redo_frame, text="Undo", font=AppConstants.scaled_btn_font(), pady=0, bd=1, state="disabled", command=self._undo_action)
+        self.redo_btn = tk.Button(self.undo_redo_frame, text="Redo", font=AppConstants.scaled_btn_font(), pady=0, bd=1, state="disabled", command=self._redo_action)
         self.undo_btn.grid(row=0, column=0, padx=(0, 1), sticky="ew")
         self.redo_btn.grid(row=0, column=1, padx=(1, 0), sticky="ew")
         
         # Clear/Reset
-        self.clear_workspace_btn = tk.Button(self.right_panel_frame, text="Clear Values & Labels", font=AppConstants.BTN_FONT,
+        self.clear_workspace_btn = tk.Button(self.right_panel_frame, text="Clear Values & Labels", font=AppConstants.scaled_btn_font(),
                                             pady=0, bd=1, command=self._clear_workspace, fg="black")
         
         # Scale slider — created once here, shown/hidden by _pack_right_panel
         self.scale_frame = tk.Frame(self.right_panel_frame, bg=AppConstants.BG_COLOR)
         tk.Label(self.scale_frame, text="Scale", bg=AppConstants.BG_COLOR,
-                 font=AppConstants.HEADER_FONT).pack(side=tk.TOP, anchor="center")
+                 font=AppConstants.scaled_header_font()).pack(side=tk.TOP, anchor="center")
         ttk.Scale(
             self.scale_frame,
             variable=self.scale_manager.var("view_scale"),
@@ -914,8 +909,8 @@ class GeometryApp:
     def _setup_canvas_and_controllers(self) -> None:
         """Create canvas inside col_canvas and initialize controllers.
         
-        All sizes are fixed at construction time. Window is locked with
-        resizable(False, False) after geometry is set — nothing ever resizes.
+        Measures the full menu bar width, sets initial window geometry, and
+        enables proportional resizing via a debounced Configure binding.
         """
         # Save/Copy buttons must exist before we proceed
         self._setup_options_panel()
@@ -953,7 +948,7 @@ class GeometryApp:
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.col_canvas)
         canvas_widget = self.canvas.get_tk_widget()
         canvas_widget.pack(fill=tk.BOTH, expand=True)
-        # No <Configure> binding on canvas_widget — window is hard-locked.
+        # canvas_widget resizes are handled via the root <Configure> binding.
 
         # Initialize controllers after all UI elements exist
         self.plot_controller = PlotController(self.ax, self.canvas, self.label_manager)
@@ -992,10 +987,10 @@ class GeometryApp:
 
         # --- Lock window to exact fixed size ---
         canvas_h = int(final_width * 3 / 4)   # 4:3 ratio
-        final_height = (AppConstants.TOP_BAR_HEIGHT
-                        + AppConstants.CONTROLS_HEIGHT
+        final_height = (AppConstants.scaled_top_bar_height()
+                        + AppConstants.scaled_controls_height()
                         + canvas_h
-                        + AppConstants.SHORTCUT_BAR_HEIGHT)
+                        + AppConstants.scaled_shortcut_bar_height())
 
         # Sync canvas frame and figure to final_width
         self.col_canvas.configure(width=final_width, height=canvas_h)
@@ -1012,13 +1007,139 @@ class GeometryApp:
         self._canvas_target_w = final_width
         self._canvas_target_h = canvas_h
 
-        # Hard-lock: geometry set once, never changes again
+        # Store native (scale=1.0) dimensions for resize ratio calculations
+        self._native_width: int = final_width
+        self._native_height: int = final_height
+        self._resize_after_id: str | None = None
+
+        # Set initial geometry and allow resizing
         self.root.geometry(f"{final_width}x{final_height}")
-        self.root.resizable(False, False)
+        self.root.resizable(True, True)
+        self.root.minsize(round(final_width * 0.5), round(final_height * 0.5))
+        self.root.maxsize(round(final_width * 3.0), round(final_height * 3.0))
+
+        # Bind resize — debounced so we only rebuild after dragging settles
+        self.root.bind("<Configure>", self._on_window_resize_event)
 
     def _fit_window_height(self) -> None:
-        """No-op — window size is locked at startup and never changes."""
+        """No-op — kept for compatibility; window sizing is handled by _apply_ui_scale."""
         self._window_height_fitted = True
+
+    # ── Global font helper ────────────────────────────────────────────────────
+
+    def _apply_global_fonts(self) -> None:
+        """Apply the current scaled font to all ttk/tk widgets globally."""
+        fs = AppConstants.scaled_ui_font_size()
+        _style = ttk.Style()
+        _style.configure(".", font=("Arial", fs))
+        _style.configure("TCombobox", font=("Arial", fs))
+        _style.configure("TSpinbox", font=("Arial", fs))
+        _style.configure("TEntry", font=("Arial", fs))
+        self.root.option_add("*Font", ("Arial", fs))
+
+    # ── Window resize handling ────────────────────────────────────────────────
+
+    def _on_window_resize_event(self, event: tk.Event) -> None:
+        """Debounce Configure events — only fire when the root window actually changes size."""
+        if event.widget is not self.root:
+            return
+        new_w = event.width
+        if not hasattr(self, "_native_width") or self._native_width == 0:
+            return
+        # Ignore sub-pixel noise
+        if hasattr(self, "_last_resize_w") and abs(new_w - self._last_resize_w) < 2:
+            return
+        self._last_resize_w = new_w
+        if hasattr(self, "_resize_after_id") and self._resize_after_id:
+            self.root.after_cancel(self._resize_after_id)
+        self._resize_after_id = self.root.after(120, lambda: self._apply_ui_scale(new_w))
+
+    def _apply_ui_scale(self, new_width: int) -> None:
+        """Rebuild all scaled UI elements to match new_width."""
+        self._resize_after_id = None
+        scale = new_width / self._native_width
+        # Also cap scale so the full window fits on screen vertically
+        screen_h = self.root.winfo_screenheight()
+        native_h = self._native_height
+        max_scale_by_screen = (screen_h * 0.95) / native_h if native_h > 0 else 3.0
+        scale = max(0.5, min(3.0, scale, max_scale_by_screen))
+
+        # Round to 2 decimal places to avoid thrashing on tiny float noise
+        scale = round(scale, 2)
+        if abs(scale - AppConstants.UI_SCALE) < 0.01:
+            return
+        AppConstants.UI_SCALE = scale
+
+        # ── 1. Fonts ──────────────────────────────────────────────────────────
+        self._apply_global_fonts()
+        fs = AppConstants.scaled_ui_font_size()
+        btn_font = AppConstants.scaled_btn_font()
+        hdr_font = AppConstants.scaled_header_font()
+
+        def _reconfigure_widget_fonts(widget: tk.Widget) -> None:
+            try:
+                current = widget.cget("font")
+                if current:
+                    widget.configure(font=btn_font)
+            except tk.TclError:
+                pass
+            for child in widget.winfo_children():
+                _reconfigure_widget_fonts(child)
+
+        _reconfigure_widget_fonts(self.root)
+
+        # ── 2. Fixed-height rows ──────────────────────────────────────────────
+        if self.top_bar is not None:
+            self.top_bar.configure(height=AppConstants.scaled_top_bar_height())
+        if self.controls_row is not None:
+            self.controls_row.configure(height=AppConstants.scaled_controls_height())
+        if hasattr(self, "shortcut_bar") and self.shortcut_bar is not None:
+            self.shortcut_bar.configure(height=AppConstants.scaled_shortcut_bar_height())
+
+        # ── 3. Canvas + figure ────────────────────────────────────────────────
+        canvas_w = new_width
+        canvas_h = int(canvas_w * 3 / 4)
+        self._canvas_target_w = canvas_w
+        self._canvas_target_h = canvas_h
+
+        self.col_canvas.configure(width=canvas_w, height=canvas_h)
+        _dpi = 100
+        _mx = AppConstants.CANVAS_PAPER_MARGIN
+        _axes_w = 1 - 2 * _mx
+        _ratio = AppConstants.PAPER_ASPECT_RATIO
+        self.fig.set_size_inches(canvas_w / _dpi, canvas_h / _dpi, forward=True)
+        _axes_h = (canvas_w * _axes_w) / (canvas_h * _ratio)
+        _axes_h = min(_axes_h, 1.0 - 2 * _mx)
+        _bottom = (1.0 - _axes_h) / 2.0
+        self.ax.set_position([_mx, _bottom, _axes_w, _axes_h])
+        self._axes_pixel_aspect = (canvas_w * _axes_w) / (canvas_h * _axes_h)
+
+        # ── 4. Lock window height to match scaled rows + canvas ───────────────
+        new_height = (AppConstants.scaled_top_bar_height()
+                      + AppConstants.scaled_controls_height()
+                      + canvas_h
+                      + AppConstants.scaled_shortcut_bar_height())
+        # Clamp geometry if it would overflow the screen
+        screen_h = self.root.winfo_screenheight()
+        if new_height > int(screen_h * 0.95):
+            # Scale back until it fits
+            fit_scale = (int(screen_h * 0.95) - AppConstants.scaled_top_bar_height()
+                         - AppConstants.scaled_controls_height()
+                         - AppConstants.scaled_shortcut_bar_height())
+            fit_scale = max(fit_scale, 100)
+            fit_canvas_w = round(fit_scale * 4 / 3)
+            canvas_w = fit_canvas_w
+            canvas_h = fit_scale
+            new_height = int(screen_h * 0.95)
+        self.root.geometry(f"{canvas_w}x{new_height}")
+
+        # ── 5. Redraw ─────────────────────────────────────────────────────────
+        if self.shape_var.get():
+            self.generate_plot()
+        else:
+            self.show_welcome()
+
+    # ── end resize handling ───────────────────────────────────────────────────
 
     def _on_window_close(self) -> None:
         """Clean up resources before closing the window."""
@@ -1438,7 +1559,7 @@ class GeometryApp:
     def _add_slider(self, label: str, variable: tk.DoubleVar, 
                     from_val: float, to_val: float, show_center: bool = False, center_value: float = None) -> ttk.Scale:
         """Add a labeled slider with tight vertical packing."""
-        lbl = tk.Label(self.adjust_sliders_frame, text=label, bg=AppConstants.BG_COLOR, font=AppConstants.HEADER_FONT)
+        lbl = tk.Label(self.adjust_sliders_frame, text=label, bg=AppConstants.BG_COLOR, font=AppConstants.scaled_header_font())
         lbl.pack(side=tk.TOP, pady=(2, 0))
         
         slider = ttk.Scale(self.adjust_sliders_frame, variable=variable, from_=from_val, to=to_val, orient="horizontal", command=self.on_slider_change)
@@ -1563,7 +1684,6 @@ class GeometryApp:
         # Collapse the controls row and shortcut bar so the canvas fills the window
         if self.controls_row is not None: self.controls_row.grid_remove()
         if hasattr(self, "shortcut_bar") and self.shortcut_bar is not None: self.shortcut_bar.grid_remove()
-        # Let the canvas row stretch to fill the freed space
         self.root.rowconfigure(2, weight=1)
         if self.col_canvas is not None:
             self.col_canvas.grid(row=2, column=0, sticky="nsew")
@@ -1574,48 +1694,53 @@ class GeometryApp:
 
         self.ax.clear()
         self.plot_controller.setup_axes()
-
-        # Standardized welcome limits
         self.ax.set_xlim(-10, 10)
         self.ax.set_ylim(-8, 8)
+        self._draw_welcome_shapes()
 
-        # Set equal aspect so shapes render without distortion regardless of canvas size
-        self.ax.set_aspect('equal', adjustable='datalim')
+    def _draw_welcome_shapes(self) -> None:
+        """Draw the welcome screen title and decorative shapes.
 
-        # With equal aspect, use a square-friendly coordinate space
-        self.ax.set_xlim(-8, 8)
-        self.ax.set_ylim(-8, 8)
-
+        All coordinates use ax.transAxes (0-1 fractions of the axes area) so
+        shapes are always visually correct regardless of canvas size or aspect.
+        """
         lw = 1.8
         ec = "#333333"
         fc = "none"
-        s = 0.9   # half-size of each shape (~1/3 of original 2.2)
-        gap = 2.6  # spacing between shape centers
-        cy = -1.8  # vertical center of shapes
+        trans = self.ax.transAxes
 
-        # Title and subtitle — moved down
-        self.ax.text(0, 2.8, "Geometry Forge",
-                    ha="center", va="center", fontsize=26, fontweight="bold",
-                    color="#333333", fontfamily="sans-serif")
-        self.ax.text(0, 1.9, "Select a category to begin",
-                    ha="center", va="center", fontsize=11,
-                    color="#aaaaaa", fontfamily="sans-serif")
+        cy = 0.38
+        s  = 0.07   # half-size as fraction of axes
 
-        # Square (left)
-        cy = 0.5
-        square = patches.Rectangle((0 - gap - s, cy - s), s * 2, s * 2,
-                                    linewidth=lw, edgecolor=ec, facecolor=fc)
-        self.ax.add_patch(square)
+        # Square (left, centred at x=0.25)
+        self.ax.add_patch(patches.FancyBboxPatch(
+            (0.25 - s, cy - s), s * 2, s * 2,
+            boxstyle="square,pad=0",
+            linewidth=lw, edgecolor=ec, facecolor=fc,
+            transform=trans, clip_on=False
+        ))
 
-        # Triangle (center)
-        tri_x = [-s, 0.0, s, -s]
-        tri_y = [cy - s, cy + s, cy - s, cy - s]
-        self.ax.plot(tri_x, tri_y, color=ec, linewidth=lw)
+        # Triangle (centre, centred at x=0.50)
+        self.ax.add_patch(patches.Polygon(
+            [[0.50 - s, cy - s], [0.50, cy + s], [0.50 + s, cy - s]],
+            closed=True,
+            linewidth=lw, edgecolor=ec, facecolor=fc,
+            transform=trans, clip_on=False
+        ))
 
-        # Circle (right)
-        circle = patches.Circle((gap, cy), radius=s,
-                                  linewidth=lw, edgecolor=ec, facecolor=fc)
-        self.ax.add_patch(circle)
+        # Circle (right, centred at x=0.75)
+        self.ax.add_patch(patches.Ellipse(
+            (0.75, cy), width=s * 2, height=s * 2,
+            linewidth=lw, edgecolor=ec, facecolor=fc,
+            transform=trans, clip_on=False
+        ))
+
+        self.ax.text(0.5, 0.65, "Geometry Forge",
+                     ha="center", va="center", fontsize=26, fontweight="bold",
+                     color="#333333", fontfamily="sans-serif", transform=trans)
+        self.ax.text(0.5, 0.57, "Select a category to begin",
+                     ha="center", va="center", fontsize=11,
+                     color="#aaaaaa", fontfamily="sans-serif", transform=trans)
 
         self.canvas.draw()
 
@@ -1738,15 +1863,15 @@ class GeometryApp:
             shape_type_label = f"{shape} Type"
             tk.Label(
                 self.shape_options_frame, text=shape_type_label, bg=AppConstants.BG_COLOR,
-                font=AppConstants.HEADER_FONT
+                font=AppConstants.scaled_header_font()
             ).pack(side=tk.TOP, pady=(0, 1), anchor="center")
             self.default_btn = tk.Button(
-                self.shape_options_frame, text="Default", width=10, font=AppConstants.BTN_FONT,
+                self.shape_options_frame, text="Default", width=10, font=AppConstants.scaled_btn_font(),
                 pady=0, bd=1, command=lambda: self._set_dimension_mode("Default")
             )
             self.default_btn.pack(side=tk.TOP, fill=tk.X, padx=5, pady=(0, 1))
             self.custom_btn = tk.Button(
-                self.shape_options_frame, text="Custom", width=10, font=AppConstants.BTN_FONT,
+                self.shape_options_frame, text="Custom", width=10, font=AppConstants.scaled_btn_font(),
                 pady=0, bd=1, command=lambda: self._set_dimension_mode("Custom")
             )
             self.custom_btn.pack(side=tk.TOP, fill=tk.X, padx=5)
@@ -2102,14 +2227,14 @@ class GeometryApp:
 
         self.triangle_type_label = tk.Label(
             self.shape_options_frame, text="Triangle Type", bg=AppConstants.BG_COLOR,
-            font=AppConstants.HEADER_FONT
+            font=AppConstants.scaled_header_font()
         )
         self.triangle_type_label.pack(side=tk.TOP, pady=(0, 2), anchor="center")
 
         self.tri_buttons = {}
         for name in ["Custom", "Isosceles", "Scalene", "Equilateral", "Right"]:
             btn = tk.Button(
-                self.shape_options_frame, text=name, width=10, font=AppConstants.BTN_FONT,
+                self.shape_options_frame, text=name, width=10, font=AppConstants.scaled_btn_font(),
                 pady=0, bd=1, command=lambda n=name: self._set_triangle_type(n)
             )
             btn.pack(side=tk.TOP, fill=tk.X, padx=5, pady=1)
@@ -2146,13 +2271,13 @@ class GeometryApp:
 
         tk.Label(
             self.shape_options_frame, text="Polygon Type", bg=AppConstants.BG_COLOR,
-            font=AppConstants.HEADER_FONT
+            font=AppConstants.scaled_header_font()
         ).pack(side=tk.TOP, pady=(0, 2), anchor="center")
 
         self.poly_buttons = {}
         for name in [PolygonType.PENTAGON.value, PolygonType.HEXAGON.value, PolygonType.OCTAGON.value]:
             btn = tk.Button(
-                self.shape_options_frame, text=name, width=10, font=AppConstants.BTN_FONT,
+                self.shape_options_frame, text=name, width=10, font=AppConstants.scaled_btn_font(),
                 pady=0, bd=1, command=lambda n=name: self._set_polygon_type(n)
             )
             btn.pack(side=tk.TOP, fill=tk.X, padx=5, pady=1)
@@ -2311,9 +2436,18 @@ class GeometryApp:
             self.col_canvas.grid(row=2, column=0, sticky="")
 
         if self.center_container is not None:
-            # Re-show all controls in the top bar
+            # Re-show all controls in the top bar (including shape label/combo hidden by show_welcome)
             for slave in self.center_container.grid_slaves(row=0):
                 slave.grid()
+            # Explicitly ensure shape label (col 2) and combo (col 3) are visible
+            if hasattr(self, "shape_combo") and self.shape_combo is not None:
+                self.shape_combo.grid()
+            for slave in self.center_container.grid_slaves(row=0):
+                try:
+                    if int(slave.grid_info().get("column", -1)) == 2:
+                        slave.grid()
+                except (tk.TclError, ValueError):
+                    pass
         
         # Explicitly show export buttons
         if self.save_btn is not None:
@@ -2432,21 +2566,21 @@ class GeometryApp:
         
         # Header
         tk.Label(self.col_dimlines, text="Labels and Lines", bg=AppConstants.BG_COLOR,
-                 font=AppConstants.HEADER_FONT).pack(side=tk.TOP, anchor="center", pady=(0, 1))
+                 font=AppConstants.scaled_header_font()).pack(side=tk.TOP, anchor="center", pady=(0, 1))
         
         # Entry row: [         ] [+ Text]
         label_frame = tk.Frame(self.col_dimlines, bg=AppConstants.BG_COLOR)
         label_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 1))
         
-        self._standalone_label_entry = tk.Entry(label_frame, width=10, font=AppConstants.BTN_FONT)
+        self._standalone_label_entry = tk.Entry(label_frame, width=10, font=AppConstants.scaled_btn_font())
         self._standalone_label_entry.pack(side=tk.LEFT, padx=(0, 2), fill=tk.X, expand=True)
         self._standalone_label_entry.bind('<Return>', lambda e: self._confirm_standalone_label())
         
-        self._standalone_text_btn = tk.Button(label_frame, text="+ Text", font=AppConstants.BTN_FONT,
+        self._standalone_text_btn = tk.Button(label_frame, text="+ Text", font=AppConstants.scaled_btn_font(),
                   pady=0, bd=1, command=self._confirm_standalone_label)
         self._standalone_text_btn.pack(side=tk.LEFT, padx=1)
         
-        self._standalone_cancel_btn = tk.Button(label_frame, text="Cancel", font=AppConstants.BTN_FONT,
+        self._standalone_cancel_btn = tk.Button(label_frame, text="Cancel", font=AppConstants.scaled_btn_font(),
                   pady=0, bd=1, command=self._cancel_standalone_edit)
         # Hidden by default — shown only during edit mode
         
@@ -2458,15 +2592,15 @@ class GeometryApp:
         
         all_buttons = [(p["label"], lambda k=p["key"], t=p["default_text"]: self._add_standalone_dim_preset(k, t)) for p in presets]
         
-        self._standalone_free_btn = tk.Button(btn_grid, text="Free", font=AppConstants.BTN_FONT,
+        self._standalone_free_btn = tk.Button(btn_grid, text="Free", font=AppConstants.scaled_btn_font(),
                   pady=0, bd=1, command=self._start_standalone_dim_mode)
-        self._standalone_cancel_dim_btn = tk.Button(btn_grid, text="Cancel", font=AppConstants.BTN_FONT,
+        self._standalone_cancel_dim_btn = tk.Button(btn_grid, text="Cancel", font=AppConstants.scaled_btn_font(),
                   pady=0, bd=1, command=self._cancel_standalone_dim_mode)
         
         row = 0
         col = 0
         for label_text, cmd in all_buttons:
-            tk.Button(btn_grid, text=label_text, font=AppConstants.BTN_FONT,
+            tk.Button(btn_grid, text=label_text, font=AppConstants.scaled_btn_font(),
                       pady=0, bd=1, command=cmd).grid(row=row, column=col, padx=1, pady=1, sticky="ew")
             col += 1
             if col > 1:
@@ -2535,7 +2669,7 @@ class GeometryApp:
         btn_grid.columnconfigure(0, weight=1)
         btn_grid.columnconfigure(1, weight=1)
         for i, p in enumerate(presets):
-            tk.Button(btn_grid, text=p["label"], font=AppConstants.BTN_FONT,
+            tk.Button(btn_grid, text=p["label"], font=AppConstants.scaled_btn_font(),
                       pady=0, bd=1,
                       command=lambda k=p["key"], t=p["default_text"]:
                           self._add_composite_preset_dim(k, t)
@@ -2569,21 +2703,21 @@ class GeometryApp:
             w.destroy()
 
         tk.Label(self.col_dimlines, text="Labels and Lines", bg=AppConstants.BG_COLOR,
-                 font=AppConstants.HEADER_FONT).pack(side=tk.TOP, anchor="center", pady=(1, 2))
+                 font=AppConstants.scaled_header_font()).pack(side=tk.TOP, anchor="center", pady=(1, 2))
 
         # Entry + "+ Text" row
         entry_row = tk.Frame(self.col_dimlines, bg=AppConstants.BG_COLOR)
         entry_row.pack(side=tk.TOP, fill=tk.X, pady=(0, 2))
 
-        self._composite_label_entry = tk.Entry(entry_row, width=8, font=AppConstants.BTN_FONT)
+        self._composite_label_entry = tk.Entry(entry_row, width=8, font=AppConstants.scaled_btn_font())
         self._composite_label_entry.pack(side=tk.LEFT, padx=(0, 2), fill=tk.X, expand=True)
         self._composite_label_entry.bind('<Return>', lambda e: self._confirm_composite_label())
 
-        self._composite_text_btn = tk.Button(entry_row, text="+ Text", font=AppConstants.BTN_FONT,
+        self._composite_text_btn = tk.Button(entry_row, text="+ Text", font=AppConstants.scaled_btn_font(),
                                               pady=0, bd=1, command=self._confirm_composite_label)
         self._composite_text_btn.pack(side=tk.LEFT, padx=1)
 
-        self._composite_cancel_btn = tk.Button(entry_row, text="Cancel", font=AppConstants.BTN_FONT,
+        self._composite_cancel_btn = tk.Button(entry_row, text="Cancel", font=AppConstants.scaled_btn_font(),
                                                pady=0, bd=1, command=self._cancel_composite_edit)
         # Hidden by default — shown only during edit mode
 
@@ -2592,10 +2726,10 @@ class GeometryApp:
         manual_grid.pack(side=tk.TOP, fill=tk.X)
         manual_grid.columnconfigure(0, weight=1)
         manual_grid.columnconfigure(1, weight=1)
-        tk.Button(manual_grid, text="↕", font=("Arial", 12),
+        tk.Button(manual_grid, text="↕", font=AppConstants.scaled_btn_font(),
                   pady=0, bd=1, command=lambda: self._start_dim_line_mode("height")
                   ).grid(row=0, column=0, padx=1, pady=(1, 0), sticky="ew")
-        tk.Button(manual_grid, text="↔", font=("Arial", 12),
+        tk.Button(manual_grid, text="↔", font=AppConstants.scaled_btn_font(),
                   pady=0, bd=1, command=lambda: self._start_dim_line_mode("width")
                   ).grid(row=0, column=1, padx=1, pady=(1, 0), sticky="ew")
         # Sub-labels directly beneath the arrow buttons
@@ -2605,7 +2739,7 @@ class GeometryApp:
         tk.Label(manual_grid, text="Horizontal", bg=AppConstants.BG_COLOR,
                  font=("Arial", 7), fg="#888888", anchor="center"
                  ).grid(row=1, column=1, sticky="ew", pady=(0, 2))
-        tk.Button(manual_grid, text="+ Free Line", font=AppConstants.BTN_FONT,
+        tk.Button(manual_grid, text="+ Free Line", font=AppConstants.scaled_btn_font(),
                   pady=0, bd=1, command=lambda: self._start_dim_line_mode("free")
                   ).grid(row=2, column=0, columnspan=2, padx=1, pady=1, sticky="ew")
 
@@ -2621,7 +2755,7 @@ class GeometryApp:
             w.destroy()
 
         tk.Label(self.col_presets, text="Presets", bg=AppConstants.BG_COLOR,
-                 font=AppConstants.HEADER_FONT).pack(side=tk.TOP, anchor="center", pady=(0, 2))
+                 font=AppConstants.scaled_header_font()).pack(side=tk.TOP, anchor="center", pady=(0, 2))
 
         # Invisible spacer ensures column never collapses below a minimum width
         tk.Frame(self.col_presets, bg=AppConstants.BG_COLOR, width=155, height=1).pack()

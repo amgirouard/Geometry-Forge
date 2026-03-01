@@ -60,7 +60,45 @@ class ValidationError(Exception):
 class AppConstants:
     # UI Settings
     WINDOW_TITLE: str = "Geometry Forge"
-    
+
+    # ── Scaling ────────────────────────────────────────────────────────────────
+    # UI_SCALE is updated at runtime when the window is resized.
+    # All pixel/font constants below are base (scale=1.0) values; use the
+    # scaled_* class methods to get the live scaled value.
+    UI_SCALE: float = 1.0
+
+    # Base (unscaled) UI font sizes — do not use directly; call scaled_btn_font() etc.
+    _BASE_UI_FONT_SIZE: int = 10
+    _BASE_HEADER_FONT_SIZE: int = 8
+    _BASE_CONTROLS_HEIGHT: int = 155
+    _BASE_TOP_BAR_HEIGHT: int = 46
+    _BASE_SHORTCUT_BAR_HEIGHT: int = 24
+
+    @classmethod
+    def scaled_ui_font_size(cls) -> int:
+        return max(6, round(cls._BASE_UI_FONT_SIZE * cls.UI_SCALE))
+
+    @classmethod
+    def scaled_btn_font(cls) -> tuple:
+        return ("Arial", max(6, round(cls._BASE_UI_FONT_SIZE * cls.UI_SCALE)))
+
+    @classmethod
+    def scaled_header_font(cls) -> tuple:
+        return ("Arial", max(5, round(cls._BASE_HEADER_FONT_SIZE * cls.UI_SCALE)), "bold")
+
+    @classmethod
+    def scaled_controls_height(cls) -> int:
+        return max(60, round(cls._BASE_CONTROLS_HEIGHT * cls.UI_SCALE))
+
+    @classmethod
+    def scaled_top_bar_height(cls) -> int:
+        return max(28, round(cls._BASE_TOP_BAR_HEIGHT * cls.UI_SCALE))
+
+    @classmethod
+    def scaled_shortcut_bar_height(cls) -> int:
+        return max(16, round(cls._BASE_SHORTCUT_BAR_HEIGHT * cls.UI_SCALE))
+    # ── End scaling ────────────────────────────────────────────────────────────
+
     DEFAULT_FONT_SIZE: int = 12
     MIN_FONT_SIZE: int = 6
     MAX_FONT_SIZE: int = 48
