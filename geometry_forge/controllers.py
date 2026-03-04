@@ -24,10 +24,10 @@ class TransformController:
     def __init__(
         self,
         on_change_callback: Callable[[], None],
-        flip_h_btn: tk.Button | None = None,
-        flip_v_btn: tk.Button | None = None,
-        rotate_ccw_btn: tk.Button | None = None,
-        rotate_cw_btn: tk.Button | None = None
+        flip_h_btn=None,
+        flip_v_btn=None,
+        rotate_ccw_btn=None,
+        rotate_cw_btn=None,
     ):
         self.on_change_callback = on_change_callback
 
@@ -138,11 +138,17 @@ class InputController:
             row=row, column=0, padx=(2, 3), sticky="e"
         )
         
-        ent_text = tk.Entry(self.input_frame, width=AppConstants.ENTRY_WIDTH, takefocus=1)
+        # Import styled entry lazily to avoid circular import at module level
+        from .app import _StyledEntry, BTN_H
+        ent_text = _StyledEntry(
+            self.input_frame, width=AppConstants.ENTRY_WIDTH,
+            font=("Arial", AppConstants.scaled_ui_font_size()),
+            height=BTN_H,
+        )
         ent_text.grid(row=row, column=1, padx=1, pady=1)
         ent_text.insert(0, default)
         if readonly:
-            ent_text.config(state="readonly")
+            ent_text.configure(state="readonly")
         
         show_var = tk.BooleanVar(value=show_default)
         

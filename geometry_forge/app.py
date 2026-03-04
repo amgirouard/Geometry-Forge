@@ -67,6 +67,23 @@ class _Tooltip:
             self._tip = None
 
 
+
+
+# ── Forge shared widgets ───────────────────────────────────────────────────────
+# All styled UI primitives live in forge_widgets.py so they can be shared
+# across Fraction Forge, Geometry Forge, Algebra Forge, etc.
+from .forge_widgets import (
+    BTN_H,
+    _StyledButton,
+    _StyledEntry,
+    _StyledStepper,
+    _StyledCombobox,
+    _ColorSwatchButton,
+    _StyledSlider,
+    _StyledCheckbox,
+)
+
+
 class GeometryApp:
     """Main application class for Geometry Forge."""
 
@@ -760,8 +777,11 @@ class GeometryApp:
     def _create_category_selector(self) -> None:
         tk.Label(self.center_container, text="Category:", bg=AppConstants.BG_COLOR, anchor="e").grid(row=0, column=0, sticky="e", padx=(0,2), pady=5)
         self.cat_var = tk.StringVar()
-        self.cat_combo = ttk.Combobox(self.center_container, textvariable=self.cat_var, state="readonly", width=15)
-        self.cat_combo["values"] = list(self.shape_data.keys())
+        self.cat_combo = _StyledCombobox(
+            self.center_container, textvariable=self.cat_var,
+            values=list(self.shape_data.keys()), width=15,
+            label="Category", bg=AppConstants.BG_COLOR,
+        )
         self.cat_combo.set("Select Category")
         self.cat_combo.grid(row=0, column=1, padx=5, pady=5, sticky="w")
         self.cat_combo.bind("<<ComboboxSelected>>", self.update_shape_list)
@@ -769,7 +789,10 @@ class GeometryApp:
     def _create_shape_selector(self) -> None:
         tk.Label(self.center_container, text="Shape:", bg=AppConstants.BG_COLOR, anchor="e").grid(row=0, column=2, padx=(10,2), sticky="e", pady=5)
         self.shape_var = tk.StringVar()
-        self.shape_combo = ttk.Combobox(self.center_container, textvariable=self.shape_var, state="readonly", width=15)
+        self.shape_combo = _StyledCombobox(
+            self.center_container, textvariable=self.shape_var,
+            width=15, label="Shape", bg=AppConstants.BG_COLOR,
+        )
         self.shape_combo.grid(row=0, column=3, padx=5, pady=5, sticky="w")
         self.shape_combo.bind("<<ComboboxSelected>>", self.update_inputs)
     
@@ -777,10 +800,10 @@ class GeometryApp:
         self.font_label = tk.Label(self.center_container, text="Font:", bg=AppConstants.BG_COLOR)
         self.font_label.grid(row=0, column=4, padx=(8, 0), pady=5)
         self.font_size_var = tk.IntVar(value=AppConstants.DEFAULT_FONT_SIZE)
-        self.font_spin = tk.Spinbox(
-            self.center_container, from_=AppConstants.MIN_FONT_SIZE, to=AppConstants.MAX_FONT_SIZE, width=3,
-            textvariable=self.font_size_var,
-            command=self.update_font_size
+        self.font_spin = _StyledStepper(
+            self.center_container, from_=AppConstants.MIN_FONT_SIZE, to=AppConstants.MAX_FONT_SIZE,
+            width=3, textvariable=self.font_size_var,
+            command=self.update_font_size, bg=AppConstants.BG_COLOR,
         )
         self.font_spin.grid(row=0, column=5, padx=2, pady=5)
         self.font_spin.bind('<FocusOut>', lambda e: self._on_font_blur())
@@ -788,25 +811,31 @@ class GeometryApp:
         self.font_spin.bind('<KP_Enter>', lambda e: self.update_font_size())
 
         self._font_family = AppConstants.DEFAULT_FONT_FAMILY
-        self.font_sans_btn = tk.Button(
-            self.center_container, text="Aa", font=AppConstants.scaled_btn_font(),
-            relief=tk.SUNKEN, bg=AppConstants.ACTIVE_BUTTON_COLOR,
-            command=self._set_font_sans
+        self.font_sans_btn = _StyledButton(
+            self.center_container, text="Aa",
+            font=AppConstants.scaled_btn_font(),
+            width=34, height=BTN_H,
+            active=True,
+            bg=AppConstants.BG_COLOR,
+            command=self._set_font_sans,
         )
         self.font_sans_btn.grid(row=0, column=6, padx=(4, 1), pady=5)
-        self.font_serif_btn = tk.Button(
-            self.center_container, text="Aa", font=("Times New Roman", AppConstants.BTN_FONT[1]),
-            relief=tk.RAISED, bg=AppConstants.DEFAULT_BUTTON_COLOR,
-            command=self._set_font_serif
+        self.font_serif_btn = _StyledButton(
+            self.center_container, text="Aa",
+            font=("Times New Roman", AppConstants.BTN_FONT[1]),
+            width=34, height=BTN_H,
+            active=False,
+            bg=AppConstants.BG_COLOR,
+            command=self._set_font_serif,
         )
         self.font_serif_btn.grid(row=0, column=7, padx=(1, 4), pady=5)
         self.weight_label = tk.Label(self.center_container, text="Weight:", bg=AppConstants.BG_COLOR)
         self.weight_label.grid(row=0, column=8, padx=(4, 0), pady=5)
         self.line_width_var = tk.IntVar(value=AppConstants.DEFAULT_LINE_WIDTH)
-        self.line_width_spin = tk.Spinbox(
-            self.center_container, from_=AppConstants.MIN_LINE_WIDTH, to=AppConstants.MAX_LINE_WIDTH, width=2,
-            textvariable=self.line_width_var,
-            command=self.update_line_width
+        self.line_width_spin = _StyledStepper(
+            self.center_container, from_=AppConstants.MIN_LINE_WIDTH, to=AppConstants.MAX_LINE_WIDTH,
+            width=2, textvariable=self.line_width_var,
+            command=self.update_line_width, bg=AppConstants.BG_COLOR,
         )
         self.line_width_spin.grid(row=0, column=9, padx=2, pady=5)
         self.line_width_spin.bind('<FocusOut>', lambda e: self._on_line_width_blur())
@@ -816,11 +845,21 @@ class GeometryApp:
 
     def _setup_options_panel(self) -> None:
         """Create Save/Copy buttons in the top bar."""
-        self.save_btn = tk.Button(self.center_container, text="Save", font=AppConstants.scaled_btn_font(), command=self.save_image)
+        self.save_btn = _StyledButton(
+            self.center_container, text="Save",
+            font=AppConstants.scaled_btn_font(),
+            width=48, height=BTN_H, bg=AppConstants.BG_COLOR,
+            command=self.save_image,
+        )
         self.save_btn.grid(row=0, column=10, padx=1, sticky="e")
         self.save_btn.grid_remove()
 
-        self.copy_btn = tk.Button(self.center_container, text="Copy", font=AppConstants.scaled_btn_font(), command=self.copy_to_clipboard)
+        self.copy_btn = _StyledButton(
+            self.center_container, text="Copy",
+            font=AppConstants.scaled_btn_font(),
+            width=48, height=BTN_H, bg=AppConstants.BG_COLOR,
+            command=self.copy_to_clipboard,
+        )
         self.copy_btn.grid(row=0, column=11, padx=1, sticky="e")
         self.copy_btn.grid_remove()
     
@@ -836,13 +875,15 @@ class GeometryApp:
         self.flip_row.columnconfigure(2, weight=1)
         
         self.flip_label = tk.Label(self.flip_row, text="Reflect:", bg=AppConstants.BG_COLOR, anchor="e")
-        self.flip_h_btn = tk.Button(
-            self.flip_row, text="↔", height=1, font=AppConstants.scaled_btn_font(),
-            command=lambda: self._flip_with_annotations('h')
+        self.flip_h_btn = _StyledButton(
+            self.flip_row, text="↔", width=40, height=BTN_H,
+            font=AppConstants.scaled_btn_font(), bg=AppConstants.BG_COLOR,
+            command=lambda: self._flip_with_annotations('h'),
         )
-        self.flip_v_btn = tk.Button(
-            self.flip_row, text="↕", height=1, font=AppConstants.scaled_btn_font(),
-            command=lambda: self._flip_with_annotations('v')
+        self.flip_v_btn = _StyledButton(
+            self.flip_row, text="↕", width=40, height=BTN_H,
+            font=AppConstants.scaled_btn_font(), bg=AppConstants.BG_COLOR,
+            command=lambda: self._flip_with_annotations('v'),
         )
         self.flip_label.grid(row=0, column=0, padx=(0, 5), sticky="e")
         self.flip_h_btn.grid(row=0, column=1, padx=1, sticky="ew")
@@ -855,13 +896,15 @@ class GeometryApp:
         self.rotate_row.columnconfigure(2, weight=1)
         
         self.rotate_label = tk.Label(self.rotate_row, text="Rotate:", bg=AppConstants.BG_COLOR, anchor="e")
-        self.rotate_ccw_btn = tk.Button(
-            self.rotate_row, text="↺", height=1, font=AppConstants.scaled_btn_font(),
-            command=lambda: self._on_rotate_click(-1)
+        self.rotate_ccw_btn = _StyledButton(
+            self.rotate_row, text="↺", width=40, height=BTN_H,
+            font=AppConstants.scaled_btn_font(), bg=AppConstants.BG_COLOR,
+            command=lambda: self._on_rotate_click(-1),
         )
-        self.rotate_cw_btn = tk.Button(
-            self.rotate_row, text="↻", height=1, font=AppConstants.scaled_btn_font(),
-            command=lambda: self._on_rotate_click(1)
+        self.rotate_cw_btn = _StyledButton(
+            self.rotate_row, text="↻", width=40, height=BTN_H,
+            font=AppConstants.scaled_btn_font(), bg=AppConstants.BG_COLOR,
+            command=lambda: self._on_rotate_click(1),
         )
         
         self.rotation_state_label = tk.Label(
@@ -885,26 +928,42 @@ class GeometryApp:
         self.undo_redo_frame = tk.Frame(self.right_panel_frame, bg=AppConstants.BG_COLOR)
         self.undo_redo_frame.columnconfigure(0, weight=1)
         self.undo_redo_frame.columnconfigure(1, weight=1)
-        self.undo_btn = tk.Button(self.undo_redo_frame, text="Undo", font=AppConstants.scaled_btn_font(), pady=0, bd=1, state="disabled", command=self._undo_action)
-        self.redo_btn = tk.Button(self.undo_redo_frame, text="Redo", font=AppConstants.scaled_btn_font(), pady=0, bd=1, state="disabled", command=self._redo_action)
+        self.undo_btn = _StyledButton(
+            self.undo_redo_frame, text="Undo",
+            font=AppConstants.scaled_btn_font(),
+            width=52, height=BTN_H, bg=AppConstants.BG_COLOR,
+            command=self._undo_action,
+        )
+        self.undo_btn.set_disabled(True)
+        self.redo_btn = _StyledButton(
+            self.undo_redo_frame, text="Redo",
+            font=AppConstants.scaled_btn_font(),
+            width=52, height=BTN_H, bg=AppConstants.BG_COLOR,
+            command=self._redo_action,
+        )
+        self.redo_btn.set_disabled(True)
         self.undo_btn.grid(row=0, column=0, padx=(0, 1), sticky="ew")
         self.redo_btn.grid(row=0, column=1, padx=(1, 0), sticky="ew")
         
         # Clear/Reset
-        self.clear_workspace_btn = tk.Button(self.right_panel_frame, text="Clear Values & Labels", font=AppConstants.scaled_btn_font(),
-                                            pady=0, bd=1, command=self._clear_workspace, fg="black")
+        self.clear_workspace_btn = _StyledButton(
+            self.right_panel_frame, text="Clear Values & Labels",
+            font=AppConstants.scaled_btn_font(),
+            width=120, height=BTN_H, bg=AppConstants.BG_COLOR,
+            command=self._clear_workspace,
+        )
         
         # Scale slider — created once here, shown/hidden by _pack_right_panel
         self.scale_frame = tk.Frame(self.right_panel_frame, bg=AppConstants.BG_COLOR)
         tk.Label(self.scale_frame, text="Scale", bg=AppConstants.BG_COLOR,
                  font=AppConstants.scaled_header_font()).pack(side=tk.TOP, anchor="center")
-        ttk.Scale(
+        _StyledSlider(
             self.scale_frame,
             variable=self.scale_manager.var("view_scale"),
             from_=0.25, to=1.0,
-            orient="horizontal",
-            command=lambda _: self._apply_view_scale_only()
-        ).pack(side=tk.TOP, fill=tk.X, expand=True, ipadx=0)
+            command=lambda _: self._apply_view_scale_only(),
+            bg=AppConstants.BG_COLOR,
+        ).pack(side=tk.TOP, fill=tk.X, expand=True, padx=5)
 
     def _setup_canvas_and_controllers(self) -> None:
         """Create canvas inside col_canvas and initialize controllers.
@@ -1032,9 +1091,6 @@ class GeometryApp:
         fs = AppConstants.scaled_ui_font_size()
         _style = ttk.Style()
         _style.configure(".", font=("Arial", fs))
-        _style.configure("TCombobox", font=("Arial", fs))
-        _style.configure("TSpinbox", font=("Arial", fs))
-        _style.configure("TEntry", font=("Arial", fs))
         self.root.option_add("*Font", ("Arial", fs))
 
     # ── Window resize handling ────────────────────────────────────────────────
@@ -1430,17 +1486,11 @@ class GeometryApp:
             self._capture_current_state()
     
     def _update_dimension_mode_buttons(self) -> None:
-        # Guard against button not existing (shapes without dimension mode)
         if not hasattr(self, 'default_btn') or self.default_btn is None or not self.default_btn.winfo_exists():
             return
-        
         mode = self.dimension_mode_var.get()
-        if mode == "Default":
-            self.default_btn.config(relief="sunken", bg=AppConstants.ACTIVE_BUTTON_COLOR, fg="black")
-            self.custom_btn.config(relief="raised", bg=AppConstants.BG_COLOR, fg="gray")
-        else:
-            self.default_btn.config(relief="raised", bg=AppConstants.BG_COLOR, fg="gray")
-            self.custom_btn.config(relief="sunken", bg=AppConstants.ACTIVE_BUTTON_COLOR, fg="black")
+        self.default_btn.set_active(mode == "Default")
+        self.custom_btn.set_active(mode == "Custom")
     
     def _clear_entries(self) -> None:
         """Clear input entries without wiping custom label positions."""
@@ -1556,22 +1606,26 @@ class GeometryApp:
         spec = self.scale_manager.specs["peak_offset"]
         self._add_slider("Peak Offset", self.peak_offset_var, spec.min_val, spec.max_val, show_center=False)
     
-    def _add_slider(self, label: str, variable: tk.DoubleVar, 
-                    from_val: float, to_val: float, show_center: bool = False, center_value: float = None) -> ttk.Scale:
+    def _add_slider(self, label: str, variable: tk.DoubleVar,
+                    from_val: float, to_val: float,
+                    show_center: bool = False,
+                    center_value: float = None) -> _StyledSlider:
         """Add a labeled slider with tight vertical packing."""
-        lbl = tk.Label(self.adjust_sliders_frame, text=label, bg=AppConstants.BG_COLOR, font=AppConstants.scaled_header_font())
+        lbl = tk.Label(self.adjust_sliders_frame, text=label,
+                       bg=AppConstants.BG_COLOR,
+                       font=AppConstants.scaled_header_font())
         lbl.pack(side=tk.TOP, pady=(2, 0))
-        
-        slider = ttk.Scale(self.adjust_sliders_frame, variable=variable, from_=from_val, to=to_val, orient="horizontal", command=self.on_slider_change)
+
+        slider = _StyledSlider(
+            self.adjust_sliders_frame,
+            variable=variable,
+            from_=from_val, to=to_val,
+            command=self.on_slider_change,
+            show_center_tick=show_center,
+            center_value=center_value,
+            bg=AppConstants.BG_COLOR,
+        )
         slider.pack(side=tk.TOP, pady=0, fill=tk.X, padx=5)
-        
-        if show_center:
-            rel_pos = (center_value - from_val) / (to_val - from_val) if center_value is not None else 0.5
-            tick_container = tk.Frame(self.adjust_sliders_frame, bg=AppConstants.BG_COLOR, height=4)
-            tick_container.pack(side=tk.TOP, fill=tk.X, padx=5)
-            tick_container.pack_propagate(False)
-            tk.Frame(tick_container, bg="gray", width=1, height=4).place(relx=rel_pos, rely=0, anchor="n")
-            
         return slider
     
     def _is_composite_shape(self, shape: str = None) -> bool:
@@ -1617,14 +1671,8 @@ class GeometryApp:
         self.font_family = family
         self.plot_controller.set_font_family(family)
         is_sans = (family == "sans-serif")
-        self.font_sans_btn.config(
-            relief=tk.SUNKEN if is_sans else tk.RAISED,
-            bg=AppConstants.ACTIVE_BUTTON_COLOR if is_sans else AppConstants.DEFAULT_BUTTON_COLOR,
-        )
-        self.font_serif_btn.config(
-            relief=tk.RAISED if is_sans else tk.SUNKEN,
-            bg=AppConstants.DEFAULT_BUTTON_COLOR if is_sans else AppConstants.ACTIVE_BUTTON_COLOR,
-        )
+        self.font_sans_btn.set_active(is_sans)
+        self.font_serif_btn.set_active(not is_sans)
         self.generate_plot()
         if not self.history_manager.is_restoring:
             self._capture_current_state()
@@ -1816,15 +1864,12 @@ class GeometryApp:
             self._capture_current_state()
 
     def _update_triangle_button_styles(self) -> None:
-        """Highlight active triangle button using standardized active state colors."""
+        """Highlight active triangle button."""
         if self.tri_buttons is None:
             return
         current = self.triangle_type_var.get()
         for name, btn in self.tri_buttons.items():
-            if name == current:
-                btn.config(relief="sunken", bg=AppConstants.ACTIVE_BUTTON_COLOR, fg="black")
-            else:
-                btn.config(relief="raised", bg=AppConstants.BG_COLOR, fg="gray")
+            btn.set_active(name == current)
 
     def on_triangle_type_change(self, event: Any | None = None) -> None:
         if not self.history_manager.is_restoring:
@@ -1865,14 +1910,16 @@ class GeometryApp:
                 self.shape_options_frame, text=shape_type_label, bg=AppConstants.BG_COLOR,
                 font=AppConstants.scaled_header_font()
             ).pack(side=tk.TOP, pady=(0, 1), anchor="center")
-            self.default_btn = tk.Button(
-                self.shape_options_frame, text="Default", width=10, font=AppConstants.scaled_btn_font(),
-                pady=0, bd=1, command=lambda: self._set_dimension_mode("Default")
+            self.default_btn = _StyledButton(
+                self.shape_options_frame, text="Default", width=80, height=BTN_H,
+                font=AppConstants.scaled_btn_font(), bg=AppConstants.BG_COLOR,
+                command=lambda: self._set_dimension_mode("Default"),
             )
             self.default_btn.pack(side=tk.TOP, fill=tk.X, padx=5, pady=(0, 1))
-            self.custom_btn = tk.Button(
-                self.shape_options_frame, text="Custom", width=10, font=AppConstants.scaled_btn_font(),
-                pady=0, bd=1, command=lambda: self._set_dimension_mode("Custom")
+            self.custom_btn = _StyledButton(
+                self.shape_options_frame, text="Custom", width=80, height=BTN_H,
+                font=AppConstants.scaled_btn_font(), bg=AppConstants.BG_COLOR,
+                command=lambda: self._set_dimension_mode("Custom"),
             )
             self.custom_btn.pack(side=tk.TOP, fill=tk.X, padx=5)
             self._update_dimension_mode_buttons()
@@ -2074,11 +2121,11 @@ class GeometryApp:
             self.plot_controller.set_font_family(ff)
             if self.font_sans_btn is not None:
                 if ff == "serif":
-                    self.font_sans_btn.config(relief=tk.RAISED, bg=AppConstants.DEFAULT_BUTTON_COLOR)
-                    self.font_serif_btn.config(relief=tk.SUNKEN, bg=AppConstants.ACTIVE_BUTTON_COLOR)
+                    self.font_sans_btn.set_active(False)
+                    self.font_serif_btn.set_active(True)
                 else:
-                    self.font_sans_btn.config(relief=tk.SUNKEN, bg=AppConstants.ACTIVE_BUTTON_COLOR)
-                    self.font_serif_btn.config(relief=tk.RAISED, bg=AppConstants.DEFAULT_BUTTON_COLOR)
+                    self.font_sans_btn.set_active(True)
+                    self.font_serif_btn.set_active(False)
 
             # Restore hashmarks checkbox
             if hasattr(self, 'show_hashmarks_var'):
@@ -2192,8 +2239,8 @@ class GeometryApp:
     def _update_undo_redo_buttons(self) -> None:
         can_undo = len(self.history_manager.undo_stack) > 1
         can_redo = self.history_manager.can_redo()
-        self.undo_btn.config(state="normal" if can_undo else "disabled")
-        self.redo_btn.config(state="normal" if can_redo else "disabled")
+        self.undo_btn.set_disabled(not can_undo)
+        self.redo_btn.set_disabled(not can_redo)
 
     def _create_transform_state(self) -> TransformState:
         return self.transform_controller.get_state()
@@ -2233,9 +2280,10 @@ class GeometryApp:
 
         self.tri_buttons = {}
         for name in ["Custom", "Isosceles", "Scalene", "Equilateral", "Right"]:
-            btn = tk.Button(
-                self.shape_options_frame, text=name, width=10, font=AppConstants.scaled_btn_font(),
-                pady=0, bd=1, command=lambda n=name: self._set_triangle_type(n)
+            btn = _StyledButton(
+                self.shape_options_frame, text=name, width=80, height=BTN_H,
+                font=AppConstants.scaled_btn_font(), bg=AppConstants.BG_COLOR,
+                command=lambda n=name: self._set_triangle_type(n),
             )
             btn.pack(side=tk.TOP, fill=tk.X, padx=5, pady=1)
             self.tri_buttons[name] = btn
@@ -2276,9 +2324,10 @@ class GeometryApp:
 
         self.poly_buttons = {}
         for name in [PolygonType.PENTAGON.value, PolygonType.HEXAGON.value, PolygonType.OCTAGON.value]:
-            btn = tk.Button(
-                self.shape_options_frame, text=name, width=10, font=AppConstants.scaled_btn_font(),
-                pady=0, bd=1, command=lambda n=name: self._set_polygon_type(n)
+            btn = _StyledButton(
+                self.shape_options_frame, text=name, width=80, height=BTN_H,
+                font=AppConstants.scaled_btn_font(), bg=AppConstants.BG_COLOR,
+                command=lambda n=name: self._set_polygon_type(n),
             )
             btn.pack(side=tk.TOP, fill=tk.X, padx=5, pady=1)
             self.poly_buttons[name] = btn
@@ -2301,10 +2350,7 @@ class GeometryApp:
             return
         current = self.polygon_type_var.get()
         for name, btn in self.poly_buttons.items():
-            if name == current:
-                btn.config(relief="sunken", bg=AppConstants.ACTIVE_BUTTON_COLOR, fg="black")
-            else:
-                btn.config(relief="raised", bg=AppConstants.BG_COLOR, fg="gray")
+            btn.set_active(name == current)
 
     def _rebuild_polygon_ui(self) -> None:
         """Rebuild polygon UI and redraw — called via after_idle."""
@@ -2572,16 +2618,25 @@ class GeometryApp:
         label_frame = tk.Frame(self.col_dimlines, bg=AppConstants.BG_COLOR)
         label_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 1))
         
-        self._standalone_label_entry = tk.Entry(label_frame, width=10, font=AppConstants.scaled_btn_font())
+        self._standalone_label_entry = _StyledEntry(
+            label_frame, width=10, font=AppConstants.scaled_btn_font(),
+            height=BTN_H,
+        )
         self._standalone_label_entry.pack(side=tk.LEFT, padx=(0, 2), fill=tk.X, expand=True)
         self._standalone_label_entry.bind('<Return>', lambda e: self._confirm_standalone_label())
         
-        self._standalone_text_btn = tk.Button(label_frame, text="+ Text", font=AppConstants.scaled_btn_font(),
-                  pady=0, bd=1, command=self._confirm_standalone_label)
+        self._standalone_text_btn = _StyledButton(
+            label_frame, text="+ Text", font=AppConstants.scaled_btn_font(),
+            width=54, height=BTN_H, bg=AppConstants.BG_COLOR,
+            command=self._confirm_standalone_label,
+        )
         self._standalone_text_btn.pack(side=tk.LEFT, padx=1)
         
-        self._standalone_cancel_btn = tk.Button(label_frame, text="Cancel", font=AppConstants.scaled_btn_font(),
-                  pady=0, bd=1, command=self._cancel_standalone_edit)
+        self._standalone_cancel_btn = _StyledButton(
+            label_frame, text="Cancel", font=AppConstants.scaled_btn_font(),
+            width=54, height=BTN_H, bg=AppConstants.BG_COLOR,
+            command=self._cancel_standalone_edit,
+        )
         # Hidden by default — shown only during edit mode
         
         # 2-column grid of preset line buttons + Free
@@ -2592,16 +2647,25 @@ class GeometryApp:
         
         all_buttons = [(p["label"], lambda k=p["key"], t=p["default_text"]: self._add_standalone_dim_preset(k, t)) for p in presets]
         
-        self._standalone_free_btn = tk.Button(btn_grid, text="Free", font=AppConstants.scaled_btn_font(),
-                  pady=0, bd=1, command=self._start_standalone_dim_mode)
-        self._standalone_cancel_dim_btn = tk.Button(btn_grid, text="Cancel", font=AppConstants.scaled_btn_font(),
-                  pady=0, bd=1, command=self._cancel_standalone_dim_mode)
+        self._standalone_free_btn = _StyledButton(
+            btn_grid, text="Free", font=AppConstants.scaled_btn_font(),
+            width=60, height=BTN_H, bg=AppConstants.BG_COLOR,
+            command=self._start_standalone_dim_mode,
+        )
+        self._standalone_cancel_dim_btn = _StyledButton(
+            btn_grid, text="Cancel", font=AppConstants.scaled_btn_font(),
+            width=60, height=BTN_H, bg=AppConstants.BG_COLOR,
+            command=self._cancel_standalone_dim_mode,
+        )
         
         row = 0
         col = 0
         for label_text, cmd in all_buttons:
-            tk.Button(btn_grid, text=label_text, font=AppConstants.scaled_btn_font(),
-                      pady=0, bd=1, command=cmd).grid(row=row, column=col, padx=1, pady=1, sticky="ew")
+            _StyledButton(
+                btn_grid, text=label_text, font=AppConstants.scaled_btn_font(),
+                width=60, height=BTN_H, bg=AppConstants.BG_COLOR,
+                command=cmd,
+            ).grid(row=row, column=col, padx=1, pady=1, sticky="ew")
             col += 1
             if col > 1:
                 col = 0
@@ -2613,15 +2677,16 @@ class GeometryApp:
         self._standalone_cancel_dim_btn.grid(row=row, column=col, padx=1, pady=1, sticky="ew")
         self._standalone_cancel_dim_btn.grid_remove()
         
-        # Show Hashmarks checkbox (only for polygon shapes) — replaces Delete Selected
+        # Show Hashmarks checkbox (only for polygon shapes)
         shape = self.shape_var.get()
         if shape in SmartGeometryEngine.POLYGON_SHAPES:
             if not hasattr(self, 'show_hashmarks_var'):
                 self.show_hashmarks_var = tk.BooleanVar(value=False)
-            tk.Checkbutton(
-                self.col_dimlines, text="Show Hashmarks", bg=AppConstants.BG_COLOR,
+            _StyledCheckbox(
+                self.col_dimlines, text="Show Hashmarks",
                 variable=self.show_hashmarks_var,
-                command=self._on_hashmarks_changed, takefocus=0
+                command=self._on_hashmarks_changed,
+                bg=AppConstants.BG_COLOR,
             ).pack(side=tk.TOP, pady=(2, 0))
 
         # Show col 3
@@ -2669,11 +2734,12 @@ class GeometryApp:
         btn_grid.columnconfigure(0, weight=1)
         btn_grid.columnconfigure(1, weight=1)
         for i, p in enumerate(presets):
-            tk.Button(btn_grid, text=p["label"], font=AppConstants.scaled_btn_font(),
-                      pady=0, bd=1,
-                      command=lambda k=p["key"], t=p["default_text"]:
-                          self._add_composite_preset_dim(k, t)
-                      ).grid(row=i // 2, column=i % 2, padx=1, pady=1, sticky="ew")
+            _StyledButton(
+                btn_grid, text=p["label"], font=AppConstants.scaled_btn_font(),
+                width=60, height=BTN_H, bg=AppConstants.BG_COLOR,
+                command=lambda k=p["key"], t=p["default_text"]:
+                    self._add_composite_preset_dim(k, t),
+            ).grid(row=i // 2, column=i % 2, padx=1, pady=1, sticky="ew")
 
     def _build_composite_ui(self, shape: str) -> None:
         """Build the transfer list UI for composite shapes."""
@@ -2709,16 +2775,24 @@ class GeometryApp:
         entry_row = tk.Frame(self.col_dimlines, bg=AppConstants.BG_COLOR)
         entry_row.pack(side=tk.TOP, fill=tk.X, pady=(0, 2))
 
-        self._composite_label_entry = tk.Entry(entry_row, width=8, font=AppConstants.scaled_btn_font())
+        self._composite_label_entry = _StyledEntry(
+            entry_row, width=8, font=AppConstants.scaled_btn_font(), height=BTN_H,
+        )
         self._composite_label_entry.pack(side=tk.LEFT, padx=(0, 2), fill=tk.X, expand=True)
         self._composite_label_entry.bind('<Return>', lambda e: self._confirm_composite_label())
 
-        self._composite_text_btn = tk.Button(entry_row, text="+ Text", font=AppConstants.scaled_btn_font(),
-                                              pady=0, bd=1, command=self._confirm_composite_label)
+        self._composite_text_btn = _StyledButton(
+            entry_row, text="+ Text", font=AppConstants.scaled_btn_font(),
+            width=54, height=BTN_H, bg=AppConstants.BG_COLOR,
+            command=self._confirm_composite_label,
+        )
         self._composite_text_btn.pack(side=tk.LEFT, padx=1)
 
-        self._composite_cancel_btn = tk.Button(entry_row, text="Cancel", font=AppConstants.scaled_btn_font(),
-                                               pady=0, bd=1, command=self._cancel_composite_edit)
+        self._composite_cancel_btn = _StyledButton(
+            entry_row, text="Cancel", font=AppConstants.scaled_btn_font(),
+            width=54, height=BTN_H, bg=AppConstants.BG_COLOR,
+            command=self._cancel_composite_edit,
+        )
         # Hidden by default — shown only during edit mode
 
         # ── Manual line buttons: ↕ | ↔ with labels directly beneath, then + Free Line ──
@@ -2726,12 +2800,16 @@ class GeometryApp:
         manual_grid.pack(side=tk.TOP, fill=tk.X)
         manual_grid.columnconfigure(0, weight=1)
         manual_grid.columnconfigure(1, weight=1)
-        tk.Button(manual_grid, text="↕", font=AppConstants.scaled_btn_font(),
-                  pady=0, bd=1, command=lambda: self._start_dim_line_mode("height")
-                  ).grid(row=0, column=0, padx=1, pady=(1, 0), sticky="ew")
-        tk.Button(manual_grid, text="↔", font=AppConstants.scaled_btn_font(),
-                  pady=0, bd=1, command=lambda: self._start_dim_line_mode("width")
-                  ).grid(row=0, column=1, padx=1, pady=(1, 0), sticky="ew")
+        _StyledButton(
+            manual_grid, text="↕", font=AppConstants.scaled_btn_font(),
+            width=60, height=BTN_H, bg=AppConstants.BG_COLOR,
+            command=lambda: self._start_dim_line_mode("height"),
+        ).grid(row=0, column=0, padx=1, pady=(1, 0), sticky="ew")
+        _StyledButton(
+            manual_grid, text="↔", font=AppConstants.scaled_btn_font(),
+            width=60, height=BTN_H, bg=AppConstants.BG_COLOR,
+            command=lambda: self._start_dim_line_mode("width"),
+        ).grid(row=0, column=1, padx=1, pady=(1, 0), sticky="ew")
         # Sub-labels directly beneath the arrow buttons
         tk.Label(manual_grid, text="Vertical", bg=AppConstants.BG_COLOR,
                  font=("Arial", 7), fg="#888888", anchor="center"
@@ -2739,9 +2817,11 @@ class GeometryApp:
         tk.Label(manual_grid, text="Horizontal", bg=AppConstants.BG_COLOR,
                  font=("Arial", 7), fg="#888888", anchor="center"
                  ).grid(row=1, column=1, sticky="ew", pady=(0, 2))
-        tk.Button(manual_grid, text="+ Free Line", font=AppConstants.scaled_btn_font(),
-                  pady=0, bd=1, command=lambda: self._start_dim_line_mode("free")
-                  ).grid(row=2, column=0, columnspan=2, padx=1, pady=1, sticky="ew")
+        _StyledButton(
+            manual_grid, text="+ Free Line", font=AppConstants.scaled_btn_font(),
+            width=124, height=BTN_H, bg=AppConstants.BG_COLOR,
+            command=lambda: self._start_dim_line_mode("free"),
+        ).grid(row=2, column=0, columnspan=2, padx=1, pady=1, sticky="ew")
 
         # Status label for dim-line placement feedback
         self._dim_status_label = tk.Label(self.col_dimlines, text="", bg=AppConstants.BG_COLOR,
