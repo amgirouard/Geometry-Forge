@@ -27,7 +27,8 @@ Geometry Forge/
     ├── labels.py                      ← Label positioning and rendering
     ├── drawers.py                     ← All shape drawer classes
     ├── controllers.py                 ← UI controllers (input, plot, history, sliders)
-    ├── widgets.py                     ← Custom Tkinter widgets
+    ├── forge_widgets.py               ← Shared styled UI widgets (buttons, entries, sliders, etc.)
+    ├── widgets.py                     ← App-specific Tkinter widgets
     ├── composite_controller.py        ← Multi-shape composite canvas controller
     ├── standalone_controller.py       ← Single-shape annotation controller
     └── app.py                         ← Main application class (GeometryApp)
@@ -57,6 +58,7 @@ Every shape has its own drawer class (e.g. `RectangleDrawer`, `ConeDrawer`). To 
 
 ### I want to change input validation (e.g. radius/diameter rules)
 **→ `validators.py`**
+
 `ShapeValidator` has all the reusable validation methods: positive checks, equality checks, mutual exclusivity, and radius/diameter consistency.
 
 ### I want to change the UI layout, menus, buttons, or keyboard shortcuts
@@ -68,6 +70,25 @@ Every shape has its own drawer class (e.g. `RectangleDrawer`, `ConeDrawer`). To 
 **→ `controllers.py`**
 
 `InputController` manages entry field creation, debounced updates, and mutual exclusivity clearing. `TransformController` handles flip/rotate state. `ScaleManager` owns all slider variables and their ranges. `PlotController` coordinates drawing and canvas refreshes. `HistoryManager` handles undo/redo.
+
+### I want to change the look of buttons, entries, dropdowns, sliders, or checkboxes
+**→ `forge_widgets.py`**
+
+All Canvas-drawn UI primitives live here and are shared across the Forge app family. The full widget catalog:
+
+| Class | Replaces | Notes |
+|---|---|---|
+| `_StyledButton` | `tk.Button` | Rounded, drop-shadow, hover/active/disabled states |
+| `_StyledEntry` | `tk.Entry` | Rounded border, focus ring, same `.get()/.insert()/.delete()` API |
+| `_StyledStepper` | `tk.Spinbox` | `[− value +]` in one unified Canvas rect |
+| `_StyledCombobox` | `ttk.Combobox` | Custom popup, fires `<<ComboboxSelected>>` |
+| `_ColorSwatchButton` | — | `_StyledButton` variant with a solid color fill and selection dot |
+| `_StyledSlider` | `ttk.Scale` | iOS-style thumb, optional center tick, `.get()/.set()/variable=` |
+| `_StyledCheckbox` | `tk.Checkbutton` | Rounded square, macOS-style checkmark, `.get()/.set()/variable=` |
+
+`BTN_H` (default `20`) is a single constant that controls the height of every widget at once. The `_ForgeTheme` dataclass is the single source of truth for all colors and radii — pass a custom instance to any widget to override the theme.
+
+This file has **zero app-specific dependencies** (no imports from `models`, `controllers`, etc.) so it can be dropped into any Forge package as-is.
 
 ### I want to change composite mode behavior (dragging, snapping, multi-shape canvas)
 **→ `composite_controller.py`**
@@ -90,6 +111,7 @@ Files import from each other using relative imports:
 ```python
 from .models import AppConstants, DrawingContext
 from .drawing import DrawingUtilities
+from .forge_widgets import BTN_H, _StyledButton, _StyledEntry
 ```
 
 The dot (`.`) means "from this same package." The `__init__.py` file is what makes the folder a Python package.
