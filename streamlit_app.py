@@ -150,6 +150,21 @@ _SHAPE_PRESET_DIM_LINES: dict[str, list[tuple[str, str, str]]] = {
 }
 
 
+# Short default text for each Dimension Label toggle (used when user hasn't entered custom text)
+_TOGGLE_LABEL_DEFAULTS: dict[str, str] = {
+    "Circumference":  "c",
+    "Radius":         "r",
+    "Diameter":       "d",
+    "Height":         "h",
+    "Slant":          "l",
+    "Length (Front)": "l",
+    "Width (Side)":   "w",
+    "Base (Tri)":     "b",
+    "Height (Tri)":   "h",
+    "Length (Prism)": "l",
+}
+
+
 def _get_preset_dim_lines(shape: str, triangle_type: str) -> list[tuple[str, str, str]]:
     """Return the preset dim line specs for the current shape (and triangle sub-type)."""
     if shape == "Triangle":
@@ -167,11 +182,10 @@ def _preset_exists(core: GeometryCore, preset_key: str) -> int:
 
 
 def _render_preset_dim_lines(core: GeometryCore, shape: str, capture_fn) -> None:
-    """Render the preset dimension line checkboxes + label text inputs."""
+    """Render the preset dimension line checkboxes + label text inputs (no subheader — caller adds it)."""
     specs = _get_preset_dim_lines(shape, core.triangle_type)
     if not specs:
         return
-    st.subheader("Dimension Lines")
     changed = False
     for preset_key, display_label, default_text in specs:
         idx = _preset_exists(core, preset_key)
@@ -187,7 +201,7 @@ def _render_preset_dim_lines(core: GeometryCore, shape: str, capture_fn) -> None
             )
         with col_txt:
             new_text = st.text_input(
-                "Label",
+                display_label,
                 value=cur_text,
                 key=f"preset_dl_txt_{shape}_{preset_key}",
                 label_visibility="collapsed",
@@ -365,7 +379,7 @@ def _render_composite_controls(core: GeometryCore, shape: str, capture_fn) -> No
                 st.rerun()
 
     with st.expander("Add Dimension Line", expanded=False):
-        cdl_text = st.text_input("Label", key="new_comp_dl_text")
+        cdl_text = st.text_input("Text", key="new_comp_dl_text")
         cdl_c1, cdl_c2 = st.columns(2)
         with cdl_c1:
             cdl_x1 = st.number_input("X1", value=0.0, step=0.5, key="new_comp_dl_x1")
@@ -439,7 +453,7 @@ def _annotation_form(core: GeometryCore, capture_fn) -> None:
                 st.rerun()
 
     with st.expander("Add Dimension Line", expanded=False):
-        sa_dl_text = st.text_input("Label", key="new_sa_dl_text")
+        sa_dl_text = st.text_input("Text", key="new_sa_dl_text")
         dl_c1, dl_c2 = st.columns(2)
         with dl_c1:
             sa_dl_x1 = st.number_input("X1", value=0.0, step=0.5, key="new_sa_dl_x1")
@@ -568,6 +582,7 @@ with st.sidebar:
             index=tri_idx,
             key="rb_tri_type",
             label_visibility="collapsed",
+            horizontal=True,
         )
         if core.triangle_type != new_tri:
             capture_state()
@@ -596,7 +611,7 @@ with st.sidebar:
             core.polygon_type = new_poly
 
     # ── 3. Dimension Mode ──────────────────────────────────────────────────────
-    if config and config.has_dimension_mode:
+    if config and config.has_dimension_mode and shape != "Triangle":
         st.subheader("Dimension Mode")
         dim_modes = ["Default", "Custom"]
         dim_idx = dim_modes.index(core.dimension_mode) if core.dimension_mode in dim_modes else 0
@@ -623,7 +638,7 @@ with st.sidebar:
             st.caption(config.help_text)
 
     # ── 4. Shape Parameters — only shown in Custom mode (or no dimension mode) ──
-    _SHAPES_NO_PARAMS = {"Circle", "Square", "Polygon"}
+    _SHAPES_NO_PARAMS = {"Circle", "Square", "Polygon", "Sphere"}
     if config and not is_composite and shape not in _SHAPES_NO_PARAMS:
         # For shapes with a dimension mode, only show params in Custom mode.
         # For shapes without a dimension mode, always show params.
@@ -773,42 +788,45 @@ with st.sidebar:
             core.transform_controller.reset()
             st.rerun()
 
-    # ── 7. Preset Dimension Lines ──────────────────────────────────────────────
+    # ── 7. Dimension Lines & Labels (merged) ───────────────────────────────────
     if shape and not is_composite:
-        _render_preset_dim_lines(core, shape, capture_state)
+        preset_specs = _get_preset_dim_lines(shape, core.triangle_type)
+        relevant_toggles = _get_relevant_toggle_keys(shape, config) if config else []
+        if preset_specs or relevant_toggles:
+            st.subheader("Dimension Lines")
 
-    # ── 8. Shape-Label Toggles ────────────────────────────────────
-    if shape and not is_composite and config:
-        relevant_toggles = _get_relevant_toggle_keys(shape, config)
-        if relevant_toggles:
-            st.subheader("Dimension Labels")
-            for lbl_key, st_key in relevant_toggles:
-                stored_text = core.label_manager.label_texts.get(lbl_key, "")
-                cur_text = stored_text if stored_text else lbl_key
-                cur_vis = core.label_manager.label_visibility.get(lbl_key, False)
+        # Preset dim lines (dashed measurement lines on the canvas)
+        if preset_specs:
+            _render_preset_dim_lines(core, shape, capture_state)
 
-                tc, ti = st.columns([2, 1])
-                with tc:
-                    new_vis = st.checkbox(lbl_key, value=cur_vis,
-                                          key=f"toggle_vis_{st_key}")
-                with ti:
-                    new_text = st.text_input(
-                        "Label",
-                        value=cur_text,
-                        key=f"toggle_text_{st_key}",
-                        label_visibility="collapsed",
-                        placeholder=lbl_key,
-                    )
+        # Label toggles (arcs, built-in dim lines drawn by the shape itself)
+        for lbl_key, st_key in relevant_toggles:
+            stored_text = core.label_manager.label_texts.get(lbl_key, "")
+            short_default = _TOGGLE_LABEL_DEFAULTS.get(lbl_key, lbl_key)
+            cur_text = stored_text if stored_text else short_default
+            cur_vis = core.label_manager.label_visibility.get(lbl_key, False)
 
-                if new_vis != cur_vis or new_text != cur_text:
-                    capture_state()
-                    # Use lbl_key as fallback display text when user leaves the field empty
-                    display_text = new_text.strip() if new_text.strip() else lbl_key
-                    if new_vis or new_text.strip():
-                        core.label_manager.set_label_text(lbl_key, display_text, new_vis)
-                    else:
-                        core.label_manager.label_texts.pop(lbl_key, None)
-                        core.label_manager.label_visibility.pop(lbl_key, None)
+            tc, ti = st.columns([2, 1])
+            with tc:
+                new_vis = st.checkbox(lbl_key, value=cur_vis,
+                                      key=f"toggle_vis_{st_key}")
+            with ti:
+                new_text = st.text_input(
+                    lbl_key,
+                    value=cur_text,
+                    key=f"toggle_text_{st_key}",
+                    label_visibility="collapsed",
+                    placeholder=short_default,
+                )
+
+            if new_vis != cur_vis or new_text != cur_text:
+                capture_state()
+                display_text = new_text.strip() if new_text.strip() else short_default
+                if new_vis or new_text.strip():
+                    core.label_manager.set_label_text(lbl_key, display_text, new_vis)
+                else:
+                    core.label_manager.label_texts.pop(lbl_key, None)
+                    core.label_manager.label_visibility.pop(lbl_key, None)
 
     # ── 9. Hash Marks (Polygon only) ──────────────────────────────────────────
     if config and config.has_feature(ShapeFeature.HASH_MARKS):
@@ -832,7 +850,7 @@ with st.sidebar:
     st.divider()
     st.subheader("Appearance")
 
-    fa_col, fb_col = st.columns([2, 1])
+    fa_col, fb_col = st.columns([1, 1])
     with fa_col:
         new_font_size = st.slider(
             "Font Size",
