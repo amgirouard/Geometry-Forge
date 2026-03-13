@@ -54,12 +54,8 @@ _SHAPE_PRESET_DIM_LINES: dict[str, list[tuple[str, str, str]]] = {
     "Rectangle": [
         ("height", "Height", "h"),
         ("width",  "Width",  "w"),
-        ("side_v", "Right Side", "b"),
-        ("side_h", "Bottom Side", "a"),
     ],
     "Square": [
-        ("height", "Height", "a"),
-        ("width",  "Width",  "a"),
         ("side_v", "Right Side", "a"),
         ("side_h", "Bottom Side", "a"),
     ],
@@ -88,10 +84,9 @@ _SHAPE_PRESET_DIM_LINES: dict[str, list[tuple[str, str, str]]] = {
         ("side_r", "Right Side", "a"),
     ],
     "Triangle_Right": [
-        ("leg_a", "Leg A",       "a"),
-        ("leg_b", "Leg B",       "b"),
-        ("hyp",   "Hypotenuse",  "c"),
-        ("height","Height",      "h"),
+        ("leg_a", "Leg A",      "a"),
+        ("leg_b", "Leg B",      "b"),
+        ("hyp",   "Hypotenuse", "c"),
     ],
     "Parallelogram": [
         ("para_height", "Height",     "h"),
@@ -107,32 +102,11 @@ _SHAPE_PRESET_DIM_LINES: dict[str, list[tuple[str, str, str]]] = {
         ("trap_side_l", "Left Leg", "c"),
         ("trap_side_r", "Right Leg","d"),
     ],
-    "Circle": [
-        ("radius",        "Radius",        "r"),
-        ("diameter",      "Diameter",      "d"),
-        ("circumference", "Circumference", "C"),
-    ],
-    "Sphere": [
-        ("radius",        "Radius",        "r"),
-        ("diameter",      "Diameter",      "d"),
-        ("circumference", "Circumference", "C"),
-    ],
-    "Hemisphere": [
-        ("radius",   "Radius",   "r"),
-        ("diameter", "Diameter", "d"),
-    ],
-    "Cylinder": [
-        ("radius",        "Radius",        "r"),
-        ("diameter",      "Diameter",      "d"),
-        ("height",        "Height",        "h"),
-        ("circumference", "Circumference", "C"),
-    ],
-    "Cone": [
-        ("radius",   "Radius",       "r"),
-        ("diameter", "Diameter",     "d"),
-        ("height",   "Height",       "h"),
-        ("slant",    "Slant Height", "l"),
-    ],
+    "Circle": [],
+    "Sphere": [],
+    "Hemisphere": [],
+    "Cylinder": [],
+    "Cone": [],
     "Rectangular Prism": [
         ("height", "Height", "h"),
         ("length", "Length", "l"),
@@ -149,6 +123,21 @@ _SHAPE_PRESET_DIM_LINES: dict[str, list[tuple[str, str, str]]] = {
     "Line Segment": [
         ("width", "Length", "l"),
     ],
+}
+
+
+# Short default text for each Dimension Label toggle (used when user hasn't entered custom text)
+_TOGGLE_LABEL_DEFAULTS: dict[str, str] = {
+    "Circumference":  "c",
+    "Radius":         "r",
+    "Diameter":       "d",
+    "Height":         "h",
+    "Slant":          "l",
+    "Length (Front)": "l",
+    "Width (Side)":   "w",
+    "Base (Tri)":     "b",
+    "Height (Tri)":   "h",
+    "Length (Prism)": "l",
 }
 
 
@@ -169,18 +158,17 @@ def _preset_exists(core: GeometryCore, preset_key: str) -> int:
 
 
 def _render_preset_dim_lines(core: GeometryCore, shape: str, capture_fn) -> None:
-    """Render the preset dimension line checkboxes + label text inputs."""
+    """Render the preset dimension line checkboxes + label text inputs (no subheader — caller adds it)."""
     specs = _get_preset_dim_lines(shape, core.triangle_type)
     if not specs:
         return
-    st.subheader("Dimension Lines")
     changed = False
     for preset_key, display_label, default_text in specs:
         idx = _preset_exists(core, preset_key)
         cur_checked = idx >= 0
         cur_text = core.standalone_dim_lines[idx]["text"] if cur_checked else default_text
 
-        col_chk, col_txt = st.columns([1, 2])
+        col_chk, col_txt = st.columns([2, 1])
         with col_chk:
             new_checked = st.checkbox(
                 display_label,
@@ -189,7 +177,7 @@ def _render_preset_dim_lines(core: GeometryCore, shape: str, capture_fn) -> None
             )
         with col_txt:
             new_text = st.text_input(
-                "Label",
+                display_label,
                 value=cur_text,
                 key=f"preset_dl_txt_{shape}_{preset_key}",
                 label_visibility="collapsed",
@@ -225,16 +213,10 @@ def _render_preset_dim_lines(core: GeometryCore, shape: str, capture_fn) -> None
 def _get_relevant_toggle_keys(shape: str, config) -> list[tuple[str, str]]:
     """Return TOGGLE_LABEL_KEYS subset that applies to the current shape."""
     TOGGLE_SHAPE_MAP: dict[str, set[str]] = {
-        "Circumference":  {"Circle", "Sphere", "Cylinder", "Cone", "Hemisphere"},
-        "Radius":         {"Circle", "Sphere", "Cylinder", "Cone", "Hemisphere"},
-        "Diameter":       {"Circle", "Sphere", "Cylinder", "Cone", "Hemisphere"},
-        "Height":         {"Cylinder", "Cone"},
-        "Slant":          {"Cone"},
-        "Length (Front)": {"Rectangular Prism"},
-        "Width (Side)":   {"Rectangular Prism"},
-        "Base (Tri)":     {"Triangular Prism"},
-        "Height (Tri)":   {"Triangular Prism"},
-        "Length (Prism)": {"Triangular Prism"},
+        "Circumference": {"Circle", "Sphere", "Cylinder", "Cone", "Hemisphere"},
+        "Radius":        {"Circle", "Sphere", "Cylinder", "Cone", "Hemisphere"},
+        "Diameter":      {"Circle", "Sphere", "Cylinder", "Cone", "Hemisphere"},
+        "Height":        {"Cylinder", "Cone"},
     }
     result = []
     for lbl_key, st_key in GeometryCore.TOGGLE_LABEL_KEYS:
@@ -367,7 +349,7 @@ def _render_composite_controls(core: GeometryCore, shape: str, capture_fn) -> No
                 st.rerun()
 
     with st.expander("Add Dimension Line", expanded=False):
-        cdl_text = st.text_input("Label", key="new_comp_dl_text")
+        cdl_text = st.text_input("Text", key="new_comp_dl_text")
         cdl_c1, cdl_c2 = st.columns(2)
         with cdl_c1:
             cdl_x1 = st.number_input("X1", value=0.0, step=0.5, key="new_comp_dl_x1")
@@ -441,7 +423,7 @@ def _annotation_form(core: GeometryCore, capture_fn) -> None:
                 st.rerun()
 
     with st.expander("Add Dimension Line", expanded=False):
-        sa_dl_text = st.text_input("Label", key="new_sa_dl_text")
+        sa_dl_text = st.text_input("Text", key="new_sa_dl_text")
         dl_c1, dl_c2 = st.columns(2)
         with dl_c1:
             sa_dl_x1 = st.number_input("X1", value=0.0, step=0.5, key="new_sa_dl_x1")
@@ -570,6 +552,7 @@ with st.sidebar:
             index=tri_idx,
             key="rb_tri_type",
             label_visibility="collapsed",
+            horizontal=True,
         )
         if core.triangle_type != new_tri:
             capture_state()
@@ -598,7 +581,7 @@ with st.sidebar:
             core.polygon_type = new_poly
 
     # ── 3. Dimension Mode ──────────────────────────────────────────────────────
-    if config and config.has_dimension_mode:
+    if config and config.has_dimension_mode and shape != "Triangle":
         st.subheader("Dimension Mode")
         dim_modes = ["Default", "Custom"]
         dim_idx = dim_modes.index(core.dimension_mode) if core.dimension_mode in dim_modes else 0
@@ -624,56 +607,10 @@ with st.sidebar:
         if config.help_text:
             st.caption(config.help_text)
 
-    # ── 4. Transforms ──────────────────────────────────────────────────────────
-    if config and not is_composite and (
-        config.has_feature(ShapeFeature.FLIP) or config.has_feature(ShapeFeature.ROTATE)
-    ):
-        st.subheader("Transforms")
-
-        if config.has_feature(ShapeFeature.FLIP):
-            c1, c2 = st.columns(2)
-            with c1:
-                label_h = "↔ Flip H ✓" if core.transform_controller.flip_h else "↔ Flip H"
-                if st.button(label_h, key="btn_flip_h", width="stretch"):
-                    capture_state()
-                    core.transform_controller.flip_h = not core.transform_controller.flip_h
-                    st.rerun()
-            with c2:
-                label_v = "↕ Flip V ✓" if core.transform_controller.flip_v else "↕ Flip V"
-                if st.button(label_v, key="btn_flip_v", width="stretch"):
-                    capture_state()
-                    core.transform_controller.flip_v = not core.transform_controller.flip_v
-                    st.rerun()
-
-        if config.has_feature(ShapeFeature.ROTATE):
-            num_sides = config.num_sides if config.num_sides > 0 else 4
-            rot_labels = config.rotation_labels
-            current_side = core.transform_controller.base_side
-
-            if rot_labels and 0 <= current_side < len(rot_labels):
-                st.caption(f"Rotation: {rot_labels[current_side]}")
-            else:
-                st.caption(f"Rotation: position {current_side}")
-
-            c3, c4 = st.columns(2)
-            with c3:
-                if st.button("↺ CCW", key="btn_rot_ccw", width="stretch"):
-                    capture_state()
-                    core.transform_controller.rotate(-1, num_sides)
-                    st.rerun()
-            with c4:
-                if st.button("↻ CW", key="btn_rot_cw", width="stretch"):
-                    capture_state()
-                    core.transform_controller.rotate(1, num_sides)
-                    st.rerun()
-
-        if st.button("Reset Transforms", key="btn_reset_xf", width="stretch"):
-            capture_state()
-            core.transform_controller.reset()
-            st.rerun()
-
-    # ── 5. Shape Parameters — only shown in Custom mode (or no dimension mode) ──
-    if config and not is_composite:
+    # ── 4. Shape Parameters — only shown in Custom mode (or no dimension mode) ──
+    _SHAPES_NO_PARAMS = {"Circle", "Square", "Polygon", "Sphere", "Hemisphere"}
+    _is_equilateral = (shape == "Triangle" and core.triangle_type == "Equilateral")
+    if config and not is_composite and shape not in _SHAPES_NO_PARAMS and not _is_equilateral:
         # For shapes with a dimension mode, only show params in Custom mode.
         # For shapes without a dimension mode, always show params.
         show_params = (not config.has_dimension_mode) or (core.dimension_mode == "Custom")
@@ -707,7 +644,7 @@ with st.sidebar:
                 if params_changed:
                     capture_state()
 
-    # ── 6. Sliders — Adjust Shape/Slope/Peak only in Default mode ──────────────
+    # ── 5. Sliders — Adjust Shape/Slope/Peak only in Default mode ──────────────
     if config and not is_composite and shape:
         slider_config = config  # already triangle sub-config if applicable
 
@@ -774,39 +711,93 @@ with st.sidebar:
             if abs(new_view - core.scale_manager.get("view_scale")) > 0.001:
                 core.scale_manager.set("view_scale", new_view)
 
-    # ── 7. Preset Dimension Lines ──────────────────────────────────────────────
-    if shape and not is_composite:
-        _render_preset_dim_lines(core, shape, capture_state)
+    # ── 6. Transformations ─────────────────────────────────────────────────────
+    if config and not is_composite and (
+        config.has_feature(ShapeFeature.FLIP) or config.has_feature(ShapeFeature.ROTATE)
+    ):
+        st.subheader("Transformations")
 
-    # ── 8. Shape-Label Toggles ────────────────────────────────────
-    if shape and not is_composite and config:
-        relevant_toggles = _get_relevant_toggle_keys(shape, config)
-        if relevant_toggles:
-            st.subheader("Dimension Labels")
-            for lbl_key, st_key in relevant_toggles:
-                cur_text = core.label_manager.label_texts.get(lbl_key, "")
-                cur_vis = core.label_manager.label_visibility.get(lbl_key, False)
-
-                tc, ti = st.columns([2, 1])
-                with tc:
-                    new_vis = st.checkbox(lbl_key, value=cur_vis,
-                                          key=f"toggle_vis_{st_key}")
-                with ti:
-                    new_text = st.text_input(
-                        "Label",
-                        value=cur_text,
-                        key=f"toggle_text_{st_key}",
-                        label_visibility="collapsed",
-                        placeholder=lbl_key,
-                    )
-
-                if new_vis != cur_vis or new_text != cur_text:
+        if config.has_feature(ShapeFeature.FLIP):
+            c1, c2 = st.columns(2)
+            with c1:
+                label_h = "↔ Flip H ✓" if core.transform_controller.flip_h else "↔ Flip H"
+                if st.button(label_h, key="btn_flip_h", width="stretch"):
                     capture_state()
-                    if new_vis or new_text:
-                        core.label_manager.set_label_text(lbl_key, new_text, new_vis)
-                    else:
-                        core.label_manager.label_texts.pop(lbl_key, None)
-                        core.label_manager.label_visibility.pop(lbl_key, None)
+                    core.transform_controller.flip_h = not core.transform_controller.flip_h
+                    st.rerun()
+            with c2:
+                label_v = "↕ Flip V ✓" if core.transform_controller.flip_v else "↕ Flip V"
+                if st.button(label_v, key="btn_flip_v", width="stretch"):
+                    capture_state()
+                    core.transform_controller.flip_v = not core.transform_controller.flip_v
+                    st.rerun()
+
+        if config.has_feature(ShapeFeature.ROTATE):
+            num_sides = config.num_sides if config.num_sides > 0 else 4
+            rot_labels = config.rotation_labels
+            current_side = core.transform_controller.base_side
+
+            c3, c4 = st.columns(2)
+            with c3:
+                if st.button("↺ CCW", key="btn_rot_ccw", width="stretch"):
+                    capture_state()
+                    core.transform_controller.rotate(-1, num_sides)
+                    st.rerun()
+            with c4:
+                if st.button("↻ CW", key="btn_rot_cw", width="stretch"):
+                    capture_state()
+                    core.transform_controller.rotate(1, num_sides)
+                    st.rerun()
+
+            if rot_labels and 0 <= current_side < len(rot_labels):
+                st.caption(f"Rotation: {rot_labels[current_side]}")
+            else:
+                st.caption(f"Rotation: position {current_side}")
+
+        if st.button("Reset Transformations", key="btn_reset_xf", width="stretch"):
+            capture_state()
+            core.transform_controller.reset()
+            st.rerun()
+
+    # ── 7. Dimension Lines & Labels (merged) ───────────────────────────────────
+    if shape and not is_composite:
+        preset_specs = _get_preset_dim_lines(shape, core.triangle_type)
+        relevant_toggles = _get_relevant_toggle_keys(shape, config) if config else []
+        if preset_specs or relevant_toggles:
+            st.subheader("Dimension Lines")
+
+        # Preset dim lines (dashed measurement lines on the canvas)
+        if preset_specs:
+            _render_preset_dim_lines(core, shape, capture_state)
+
+        # Label toggles (arcs, built-in dim lines drawn by the shape itself)
+        for lbl_key, st_key in relevant_toggles:
+            stored_text = core.label_manager.label_texts.get(lbl_key, "")
+            short_default = _TOGGLE_LABEL_DEFAULTS.get(lbl_key, lbl_key)
+            cur_text = stored_text if stored_text else short_default
+            cur_vis = core.label_manager.label_visibility.get(lbl_key, False)
+
+            tc, ti = st.columns([2, 1])
+            with tc:
+                new_vis = st.checkbox(lbl_key, value=cur_vis,
+                                      key=f"toggle_vis_{st_key}")
+            with ti:
+                new_text = st.text_input(
+                    lbl_key,
+                    value=cur_text,
+                    key=f"toggle_text_{st_key}",
+                    label_visibility="collapsed",
+                    placeholder=short_default,
+                )
+
+            if new_vis != cur_vis or new_text != cur_text:
+                capture_state()
+                display_text = new_text.strip() if new_text.strip() else short_default
+                if new_vis or new_text.strip():
+                    core.label_manager.set_label_text(lbl_key, display_text, new_vis)
+                else:
+                    core.label_manager.label_texts.pop(lbl_key, None)
+                    core.label_manager.label_visibility.pop(lbl_key, None)
 
     # ── 9. Hash Marks (Polygon only) ──────────────────────────────────────────
     if config and config.has_feature(ShapeFeature.HASH_MARKS):
@@ -827,9 +818,10 @@ with st.sidebar:
         _render_annotation_controls(core, capture_state)
 
     # ── 12. Appearance ─────────────────────────────────────────────────────────
+    st.divider()
     st.subheader("Appearance")
 
-    fa_col, fb_col = st.columns([1, 2])
+    fa_col, fb_col = st.columns([1, 1])
     with fa_col:
         new_font_size = st.slider(
             "Font Size",
@@ -865,6 +857,7 @@ with st.sidebar:
         core.line_width = new_lw
 
     # ── 13. Actions ────────────────────────────────────────────────────────────
+    st.divider()
     st.subheader("Actions")
     ca, cb = st.columns(2)
     with ca:
@@ -880,7 +873,7 @@ with st.sidebar:
             do_redo()
             st.rerun()
 
-    if st.button("🔄 Reset All", key="btn_reset_all", width="stretch"):
+    if st.button("↺ Reset All", key="btn_reset_all", width="stretch"):
         capture_state()
         core.reset_all()
         st.rerun()
@@ -912,4 +905,4 @@ with st.sidebar:
 
 # ── Main canvas ───────────────────────────────────────────────────────────────
 fig = core.generate_figure()
-st.pyplot(fig, use_container_width=True)
+st.pyplot(fig, width="stretch")
