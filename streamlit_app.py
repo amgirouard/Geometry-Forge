@@ -52,36 +52,31 @@ section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] > div {
 # preset_key must match a key in GeometryCore._dim_dispatch.
 _SHAPE_PRESET_DIM_LINES: dict[str, list[tuple[str, str, str]]] = {
     "Rectangle": [
-        ("height", "Height", "h"),
+        ("height", "Length", "l"),
         ("width",  "Width",  "w"),
     ],
     "Square": [
-        ("side_v", "Right Side", "a"),
-        ("side_h", "Bottom Side", "a"),
+        ("side_v", "Side", "s"),
     ],
     "Triangle_Custom": [
         ("height", "Height",     "h"),
-        ("width",  "Base Width", "b"),
-        ("side_l", "Left Side",  "c"),
-        ("side_r", "Right Side", "a"),
+        ("width",  "Base",       "b"),
+        ("side_l", "Left Side",  "s"),
+        ("side_r", "Right Side", "s"),
     ],
     "Triangle_Isosceles": [
-        ("height", "Height",     "h"),
-        ("width",  "Base Width", "a"),
-        ("side_l", "Left Side",  "b"),
-        ("side_r", "Right Side", "b"),
+        ("width",  "Base",   "a"),
+        ("side_l", "Side",   "s"),
+        ("height", "Height", "h"),
     ],
     "Triangle_Scalene": [
+        ("width",  "Base",       "a"),
+        ("side_l", "Left Side",  "s"),
+        ("side_r", "Right Side", "s"),
         ("height", "Height",     "h"),
-        ("width",  "Base Width", "a"),
-        ("side_l", "Left Side",  "b"),
-        ("side_r", "Right Side", "c"),
     ],
     "Triangle_Equilateral": [
-        ("height", "Height",     "h"),
-        ("width",  "Base Width", "a"),
-        ("side_l", "Left Side",  "a"),
-        ("side_r", "Right Side", "a"),
+        ("side_l", "Side", "s"),
     ],
     "Triangle_Right": [
         ("leg_a", "Leg A",      "a"),
@@ -91,16 +86,15 @@ _SHAPE_PRESET_DIM_LINES: dict[str, list[tuple[str, str, str]]] = {
     "Parallelogram": [
         ("para_height", "Height",     "h"),
         ("para_base",   "Base",       "a"),
-        ("para_top",    "Top",        "a"),
-        ("para_side_l", "Left Side",  "b"),
-        ("para_side_r", "Right Side", "b"),
+        ("para_side_l", "Left Side",  "s"),
+        ("para_side_r", "Right Side", "s"),
     ],
     "Trapezoid": [
-        ("trap_height", "Height",   "h"),
-        ("trap_base",   "Bottom",   "b"),
-        ("trap_top",    "Top",      "a"),
-        ("trap_side_l", "Left Leg", "c"),
-        ("trap_side_r", "Right Leg","d"),
+        ("trap_height", "Height",     "h"),
+        ("trap_top",    "Top",        "a"),
+        ("trap_base",   "Base",       "b"),
+        ("trap_side_l", "Left Side",  "s"),
+        ("trap_side_r", "Right Side", "s"),
     ],
     "Circle": [],
     "Sphere": [],
@@ -108,17 +102,17 @@ _SHAPE_PRESET_DIM_LINES: dict[str, list[tuple[str, str, str]]] = {
     "Cylinder": [],
     "Cone": [],
     "Rectangular Prism": [
-        ("height", "Height", "h"),
         ("length", "Length", "l"),
         ("width",  "Width",  "w"),
+        ("height", "Height", "h"),
     ],
     "Triangular Prism": [
-        ("height",     "Height",         "h"),
-        ("tri_base",   "Triangle Base",  "b"),
-        ("tri_length", "Prism Length",   "l"),
+        ("tri_base",   "Base",   "b"),
+        ("height",     "Height", "h"),
+        ("tri_length", "Length", "l"),
     ],
     "Polygon": [
-        ("side", "Side Length", "a"),
+        ("side", "Side", "s"),
     ],
     "Line Segment": [
         ("width", "Length", "l"),
@@ -541,6 +535,12 @@ with st.sidebar:
     config = ShapeConfigProvider.get(shape) if shape else None
     is_composite = core._is_composite_shape(shape)
 
+    st.divider()
+
+    # Under-construction notice for Angles & Lines and Composite Figures
+    if core.category in ("Angles & Lines", "Composite Figures"):
+        st.caption("🚧 Under construction")
+
     # ── 2. Shape Sub-type ──────────────────────────────────────────────────────
     if shape == "Triangle":
         st.subheader("Triangle Type")
@@ -715,6 +715,7 @@ with st.sidebar:
     if config and not is_composite and (
         config.has_feature(ShapeFeature.FLIP) or config.has_feature(ShapeFeature.ROTATE)
     ):
+        st.divider()
         st.subheader("Transformations")
 
         if config.has_feature(ShapeFeature.FLIP):
@@ -764,6 +765,7 @@ with st.sidebar:
         preset_specs = _get_preset_dim_lines(shape, core.triangle_type)
         relevant_toggles = _get_relevant_toggle_keys(shape, config) if config else []
         if preset_specs or relevant_toggles:
+            st.divider()
             st.subheader("Dimension Lines")
 
         # Preset dim lines (dashed measurement lines on the canvas)
