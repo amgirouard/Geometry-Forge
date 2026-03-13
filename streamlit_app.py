@@ -1048,3 +1048,15 @@ if coords and ax:
         st.session_state.selected_annotation = ann
         if ann != prev_ann:
             st.rerun()
+
+with st.expander("🐛 Debug info", expanded=False):
+    st.write("**raw coords:**", coords)
+    if coords and ax:
+        pos_dbg = _pixel_to_data(coords["x"], coords["y"], fig, ax)
+        st.write("**_pixel_to_data:**", pos_dbg)
+        st.write("**ax xlim/ylim:**", ax.get_xlim(), ax.get_ylim())
+        st.write("**ax position:**", ax.get_position().bounds)
+    st.write("**auto_positions:**", {k: (round(v[0],3), round(v[1],3)) for k, v in core.label_manager.auto_positions.items()})
+    st.write("**dim_label_bboxes:**", [(round(b[0],3), round(b[1],3), round(b[2],3), round(b[3],3)) for b in core._standalone_dim_label_bboxes])
+    st.write("**selected_annotation:**", st.session_state.get("selected_annotation"))
+    st.write("**last_click_pos:**", st.session_state.get("last_click_pos"))
