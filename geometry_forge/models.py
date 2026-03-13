@@ -598,7 +598,7 @@ def _build_triangle_sub_configs() -> dict[str, "ShapeConfig"]:
         help_text="Enter Base + Height OR Base + both Sides (mutually exclusive)."
     )
     configs["Triangle_Isosceles"] = ShapeConfig(
-        labels=["Base Label", "Left Label", "Right Label", "Height"],
+        labels=["Base", "Left", "Right", "Height"],
         default_values=["a", "b", "b", "h"],
         features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True},
         num_sides=3,
@@ -608,10 +608,10 @@ def _build_triangle_sub_configs() -> dict[str, "ShapeConfig"]:
     configs["Triangle_Scalene"] = ShapeConfig(
         labels=["Side A (Bottom)", "Side B (Left)", "Side C (Right)", "Height"],
         default_values=["a", "b", "c", "h"],
-        features={ShapeFeature.SLIDER_SHAPE: True, ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True, ShapeFeature.SLIDER_PEAK: True},
+        features={ShapeFeature.FLIP: True, ShapeFeature.ROTATE: True, ShapeFeature.SLIDER_PEAK: True},
         num_sides=3,
         has_dimension_mode=False,
-        help_text="Scalene triangle with all different sides. Sliders adjust shape proportions."
+        help_text="Scalene triangle with all different sides. Slider adjusts peak offset."
     )
     configs["Triangle_Equilateral"] = ShapeConfig(
         labels=["Side A (Bottom)", "Side B (Left)", "Side C (Right)"],

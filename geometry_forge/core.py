@@ -134,6 +134,7 @@ class GeometryCore:
 
         # ── Matplotlib figure ─────────────────────────────────────────────────
         self.fig = Figure(figsize=(9.7, 7.27), facecolor="white")
+        self.fig.subplots_adjust(left=0.01, right=0.99, top=0.99, bottom=0.01)
         self.ax = self.fig.add_subplot(111)
         self.plot_controller = PlotController(
             fig=self.fig,

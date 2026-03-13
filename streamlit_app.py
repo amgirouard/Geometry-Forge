@@ -54,12 +54,8 @@ _SHAPE_PRESET_DIM_LINES: dict[str, list[tuple[str, str, str]]] = {
     "Rectangle": [
         ("height", "Height", "h"),
         ("width",  "Width",  "w"),
-        ("side_v", "Right Side", "b"),
-        ("side_h", "Bottom Side", "a"),
     ],
     "Square": [
-        ("height", "Height", "a"),
-        ("width",  "Width",  "a"),
         ("side_v", "Right Side", "a"),
         ("side_h", "Bottom Side", "a"),
     ],
@@ -88,10 +84,9 @@ _SHAPE_PRESET_DIM_LINES: dict[str, list[tuple[str, str, str]]] = {
         ("side_r", "Right Side", "a"),
     ],
     "Triangle_Right": [
-        ("leg_a", "Leg A",       "a"),
-        ("leg_b", "Leg B",       "b"),
-        ("hyp",   "Hypotenuse",  "c"),
-        ("height","Height",      "h"),
+        ("leg_a", "Leg A",      "a"),
+        ("leg_b", "Leg B",      "b"),
+        ("hyp",   "Hypotenuse", "c"),
     ],
     "Parallelogram": [
         ("para_height", "Height",     "h"),
@@ -192,7 +187,7 @@ def _render_preset_dim_lines(core: GeometryCore, shape: str, capture_fn) -> None
         cur_checked = idx >= 0
         cur_text = core.standalone_dim_lines[idx]["text"] if cur_checked else default_text
 
-        col_chk, col_txt = st.columns([1, 2])
+        col_chk, col_txt = st.columns([2, 1])
         with col_chk:
             new_checked = st.checkbox(
                 display_label,
@@ -639,7 +634,8 @@ with st.sidebar:
 
     # ── 4. Shape Parameters — only shown in Custom mode (or no dimension mode) ──
     _SHAPES_NO_PARAMS = {"Circle", "Square", "Polygon", "Sphere"}
-    if config and not is_composite and shape not in _SHAPES_NO_PARAMS:
+    _is_equilateral = (shape == "Triangle" and core.triangle_type == "Equilateral")
+    if config and not is_composite and shape not in _SHAPES_NO_PARAMS and not _is_equilateral:
         # For shapes with a dimension mode, only show params in Custom mode.
         # For shapes without a dimension mode, always show params.
         show_params = (not config.has_dimension_mode) or (core.dimension_mode == "Custom")
@@ -766,11 +762,6 @@ with st.sidebar:
             rot_labels = config.rotation_labels
             current_side = core.transform_controller.base_side
 
-            if rot_labels and 0 <= current_side < len(rot_labels):
-                st.caption(f"Rotation: {rot_labels[current_side]}")
-            else:
-                st.caption(f"Rotation: position {current_side}")
-
             c3, c4 = st.columns(2)
             with c3:
                 if st.button("↺ CCW", key="btn_rot_ccw", width="stretch"):
@@ -782,6 +773,11 @@ with st.sidebar:
                     capture_state()
                     core.transform_controller.rotate(1, num_sides)
                     st.rerun()
+
+            if rot_labels and 0 <= current_side < len(rot_labels):
+                st.caption(f"Rotation: {rot_labels[current_side]}")
+            else:
+                st.caption(f"Rotation: position {current_side}")
 
         if st.button("Reset Transformations", key="btn_reset_xf", width="stretch"):
             capture_state()
@@ -934,4 +930,4 @@ with st.sidebar:
 
 # ── Main canvas ───────────────────────────────────────────────────────────────
 fig = core.generate_figure()
-st.pyplot(fig, use_container_width=True)
+st.pyplot(fig, width="stretch")
