@@ -4,13 +4,17 @@ Run with:  streamlit run streamlit_app.py
 """
 from __future__ import annotations
 
+import io
 import streamlit as st
+from streamlit_image_coordinates import streamlit_image_coordinates
 
 from geometry_forge.core import GeometryCore
 from geometry_forge.models import (
     AppConstants, ShapeConfigProvider, ShapeFeature,
     TriangleType, PolygonType,
 )
+
+CANVAS_DPI: int = 100  # DPI used when rendering the canvas PNG for click capture
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -445,6 +449,122 @@ def _annotation_form(core: GeometryCore, capture_fn) -> None:
             st.rerun()
 
 
+# ── Click-to-place helpers ────────────────────────────────────────────────────
+
+def _pixel_to_data(
+    px: int, py: int, fig, ax
+) -> tuple[float, float] | None:
+    """Convert pixel coords (from streamlit_image_coordinates) to axes data coords."""
+    fig_w_px = fig.get_figwidth() * CANVAS_DPI
+    fig_h_px = fig.get_figheight() * CANVAS_DPI
+    norm_x = px / fig_w_px
+    norm_y = py / fig_h_px
+    ax_pos = ax.get_position()
+    if not (ax_pos.x0 <= norm_x <= ax_pos.x0 + ax_pos.width):
+        return None
+    if not (ax_pos.y0 <= norm_y <= ax_pos.y0 + ax_pos.height):
+        return None
+    ax_rel_x = (norm_x - ax_pos.x0) / ax_pos.width
+    ax_rel_y = (norm_y - ax_pos.y0) / ax_pos.height
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+    data_x = xlim[0] + ax_rel_x * (xlim[1] - xlim[0])
+    data_y = ylim[0] + (1.0 - ax_rel_y) * (ylim[1] - ylim[0])  # Y axis is inverted
+    return round(data_x, 2), round(data_y, 2)
+
+
+def _render_placement_form(core: GeometryCore, capture_fn) -> None:
+    """Render the click-to-place annotation form when a pending click exists."""
+    pending = st.session_state.get("pending_click")
+    if not pending:
+        return
+
+    mode = st.session_state.get("pending_click_mode", "label")
+    x, y = pending["x"], pending["y"]
+
+    with st.container(border=True):
+        st.caption(f"📍 Placing at ({x}, {y})")
+        mode_col, _ = st.columns([2, 1])
+        with mode_col:
+            new_mode = st.radio(
+                "Type",
+                ["label", "dim line"],
+                index=0 if mode == "label" else 1,
+                key="place_mode_radio",
+                horizontal=True,
+                label_visibility="collapsed",
+            )
+        if new_mode != mode:
+            st.session_state.pending_click_mode = new_mode
+            st.rerun()
+
+        if mode == "label":
+            txt = st.text_input("Label text", key="place_label_text", placeholder="e.g. x")
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("Place Label", key="btn_place_label", width="stretch"):
+                    capture_fn()
+                    core.standalone_labels.append({
+                        "text": txt or "?",
+                        "x": x,
+                        "y": y,
+                    })
+                    st.session_state.pending_click = None
+                    st.session_state.last_click_pos = None
+                    st.rerun()
+            with c2:
+                if st.button("Cancel", key="btn_place_cancel", width="stretch"):
+                    st.session_state.pending_click = None
+                    st.session_state.last_click_pos = None
+                    st.rerun()
+
+        else:  # dim line
+            start = st.session_state.get("pending_click_start")
+            if start is None:
+                st.caption("Click on the canvas to set the **start** point.")
+                if st.button("Use current point as start", key="btn_set_start", width="stretch"):
+                    st.session_state.pending_click_start = {"x": x, "y": y}
+                    st.session_state.pending_click = None
+                    st.session_state.last_click_pos = None
+                    st.rerun()
+                if st.button("Cancel", key="btn_dl_cancel_nostart", width="stretch"):
+                    st.session_state.pending_click = None
+                    st.session_state.last_click_pos = None
+                    st.session_state.pending_click_mode = "label"
+                    st.rerun()
+            else:
+                st.caption(
+                    f"Start: ({start['x']}, {start['y']})  →  "
+                    f"End: ({x}, {y})"
+                )
+                dl_txt = st.text_input("Dim line label", key="place_dl_text", placeholder="e.g. l")
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button("Place Dim Line", key="btn_place_dl", width="stretch"):
+                        capture_fn()
+                        core.standalone_dim_lines.append({
+                            "text": dl_txt or "?",
+                            "x1": start["x"], "y1": start["y"],
+                            "x2": x, "y2": y,
+                            "label_x": None, "label_y": None,
+                            "preset_key": None,
+                            "user_dragged": False,
+                            "constraint": None,
+                        })
+                        st.session_state.pending_click = None
+                        st.session_state.pending_click_start = None
+                        st.session_state.last_click_pos = None
+                        st.session_state.pending_click_mode = "label"
+                        st.rerun()
+                with c2:
+                    if st.button("Cancel", key="btn_dl_cancel", width="stretch"):
+                        st.session_state.pending_click = None
+                        st.session_state.pending_click_start = None
+                        st.session_state.last_click_pos = None
+                        st.session_state.pending_click_mode = "label"
+                        st.rerun()
+
+
 # ── Session state bootstrap ───────────────────────────────────────────────────
 if "core" not in st.session_state:
     st.session_state.core = GeometryCore()
@@ -452,6 +572,14 @@ if "history" not in st.session_state:
     st.session_state.history: list[dict] = []
 if "redo_stack" not in st.session_state:
     st.session_state.redo_stack: list[dict] = []
+if "pending_click" not in st.session_state:
+    st.session_state.pending_click = None
+if "pending_click_start" not in st.session_state:
+    st.session_state.pending_click_start = None
+if "pending_click_mode" not in st.session_state:
+    st.session_state.pending_click_mode = "label"
+if "last_click_pos" not in st.session_state:
+    st.session_state.last_click_pos = None
 
 core: GeometryCore = st.session_state.core
 
@@ -913,4 +1041,21 @@ with st.sidebar:
 
 # ── Main canvas ───────────────────────────────────────────────────────────────
 fig = core.generate_figure()
-st.pyplot(fig, width="stretch")
+ax = fig.axes[0] if fig.axes else None
+
+# Placement form appears above the canvas when a click is pending
+if ax and not core._is_composite_shape(core.shape_name):
+    _render_placement_form(core, capture_state)
+
+# Render to PNG for click-capture component
+buf = io.BytesIO()
+fig.savefig(buf, format="png", dpi=CANVAS_DPI)
+buf.seek(0)
+
+coords = streamlit_image_coordinates(buf, key="canvas_click", use_column_width=True)
+if coords and ax:
+    pos = _pixel_to_data(coords["x"], coords["y"], fig, ax)
+    if pos is not None and pos != st.session_state.last_click_pos:
+        st.session_state.last_click_pos = pos
+        st.session_state.pending_click = {"x": pos[0], "y": pos[1]}
+        st.rerun()
