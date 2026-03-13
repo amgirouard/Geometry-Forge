@@ -418,13 +418,11 @@ def _render_nudge_panel(fig, ax, capture_fn) -> None:
     if not ann:
         return
 
-    # Step size proportional to visible data range
+    # Fixed step: 2% of visible data range
     xlim = ax.get_xlim()
     ylim = ax.get_ylim()
     view_range = max(abs(xlim[1] - xlim[0]), abs(ylim[1] - ylim[0]))
-    step_key = st.session_state.get("nudge_step_key", "Medium")
-    step_values = {"Small": view_range * 0.01, "Medium": view_range * 0.025, "Large": view_range * 0.06}
-    step = step_values[step_key]
+    step = view_range * 0.02
 
     def _nudge(dx: float, dy: float) -> None:
         if ann["type"] == "builtin":
@@ -446,7 +444,7 @@ def _render_nudge_panel(fig, ax, capture_fn) -> None:
             dim["label_y"] = ly + dy
 
     with st.container(border=True):
-        c_name, c_u, c_l, c_rst, c_r, c_d, c_step, c_close = st.columns([2, 1, 1, 1, 1, 1, 4, 1])
+        c_name, c_u, c_l, c_rst, c_r, c_d, c_close = st.columns([2, 1, 1, 1, 1, 1, 1])
         with c_name:
             st.caption(f"**{ann['name']}**")
         with c_u:
@@ -471,14 +469,6 @@ def _render_nudge_panel(fig, ax, capture_fn) -> None:
         with c_d:
             if st.button("↓", key="nl_d", use_container_width=True, help="Move label down"):
                 _nudge(0, -step); st.rerun()
-        with c_step:
-            new_step_key = st.radio(
-                "Step", ["Small", "Medium", "Large"],
-                index=["Small", "Medium", "Large"].index(step_key),
-                horizontal=True, label_visibility="collapsed", key="nudge_step_radio",
-            )
-            if new_step_key != step_key:
-                st.session_state.nudge_step_key = new_step_key; st.rerun()
         with c_close:
             if st.button("✕", key="btn_nudge_close", use_container_width=True, help="Deselect"):
                 core.label_manager.builtin_selected = None
