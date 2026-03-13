@@ -20,6 +20,31 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+st.markdown("""
+<style>
+/* Reduce vertical spacing between sidebar widgets */
+section[data-testid="stSidebar"] .block-container {
+    padding-top: 0.5rem;
+}
+section[data-testid="stSidebar"] .stElementContainer {
+    margin-bottom: -0.4rem;
+}
+section[data-testid="stSidebar"] .stMarkdown,
+section[data-testid="stSidebar"] .stTextInput,
+section[data-testid="stSidebar"] .stCheckbox,
+section[data-testid="stSidebar"] .stSlider,
+section[data-testid="stSidebar"] .stSelectbox,
+section[data-testid="stSidebar"] .stRadio,
+section[data-testid="stSidebar"] .stButton {
+    margin-bottom: 0 !important;
+    padding-bottom: 0 !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] > div {
+    gap: 0.25rem;
+}
+</style>
+""", unsafe_allow_html=True)
+
 # ── Helper functions ──────────────────────────────────────────────────────────
 
 def _get_relevant_toggle_keys(shape: str, config) -> list[tuple[str, str]]:
@@ -692,4 +717,4 @@ with st.sidebar:
 
 # ── Main canvas ───────────────────────────────────────────────────────────────
 fig = core.generate_figure()
-st.pyplot(fig, width="stretch")
+st.pyplot(fig, use_container_width=True)
