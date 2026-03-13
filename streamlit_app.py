@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import io
 import streamlit as st
+from PIL import Image as _PILImage
 from streamlit_image_coordinates import streamlit_image_coordinates
 
 from geometry_forge.core import GeometryCore
@@ -1047,12 +1048,13 @@ ax = fig.axes[0] if fig.axes else None
 if ax and not core._is_composite_shape(core.shape_name):
     _render_placement_form(core, capture_state)
 
-# Render to PNG for click-capture component
+# Render to PIL Image for click-capture component (BytesIO not accepted)
 buf = io.BytesIO()
 fig.savefig(buf, format="png", dpi=CANVAS_DPI)
 buf.seek(0)
+pil_img = _PILImage.open(buf)
 
-coords = streamlit_image_coordinates(buf, key="canvas_click", use_column_width=True)
+coords = streamlit_image_coordinates(pil_img, key="canvas_click", use_column_width=True)
 if coords and ax:
     pos = _pixel_to_data(coords["x"], coords["y"], fig, ax)
     if pos is not None and pos != st.session_state.last_click_pos:
