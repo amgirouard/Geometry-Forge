@@ -1,13 +1,18 @@
-"""Entry point for running Geometry Forge as a package: python -m geometry_forge"""
+"""Entry point for running Geometry Forge as a package.
 
-import tkinter as tk
-from .app import GeometryApp
+Usage:  python -m geometry_forge
+"""
+import subprocess
+import sys
+from pathlib import Path
 
 
-def main():
-    root = tk.Tk()
-    app = GeometryApp(root)
-    root.mainloop()
+def main() -> None:
+    app = Path(__file__).parent.parent / "streamlit_app.py"
+    subprocess.run(
+        [sys.executable, "-m", "streamlit", "run", str(app)],
+        check=False,
+    )
 
 
 if __name__ == "__main__":

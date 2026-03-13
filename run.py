@@ -1,9 +1,14 @@
-"""Run Geometry Forge — convenience launcher."""
+"""Run Geometry Forge — convenience launcher.
 
-import tkinter as tk
-from geometry_forge.app import GeometryApp
+Usage:  python run.py
+"""
+import subprocess
+import sys
+from pathlib import Path
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = GeometryApp(root)
-    root.mainloop()
+    app = Path(__file__).parent / "streamlit_app.py"
+    subprocess.run(
+        [sys.executable, "-m", "streamlit", "run", str(app)],
+        check=False,
+    )
