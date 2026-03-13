@@ -319,13 +319,20 @@ def _render_composite_controls(core: GeometryCore, shape: str, capture_fn) -> No
 # ── Canvas interaction helpers ────────────────────────────────────────────────
 
 def _pixel_to_data(
-    px: int, py: int, fig, ax
+    px: int, py: int, fig, ax, img_w: float | None = None, img_h: float | None = None
 ) -> tuple[float, float] | None:
-    """Convert pixel coords (from streamlit_image_coordinates) to axes data coords."""
-    fig_w_px = fig.get_figwidth() * CANVAS_DPI
-    fig_h_px = fig.get_figheight() * CANVAS_DPI
-    norm_x = px / fig_w_px
-    norm_y = py / fig_h_px
+    """Convert pixel coords (from streamlit_image_coordinates) to axes data coords.
+
+    img_w / img_h should be coords["width"] / coords["height"] — the displayed
+    image dimensions in the browser.  Falling back to the original render size
+    gives the wrong result because streamlit_image_coordinates returns display
+    coordinates, not original-image coordinates.
+    """
+    if img_w is None or img_h is None:
+        img_w = fig.get_figwidth() * CANVAS_DPI
+        img_h = fig.get_figheight() * CANVAS_DPI
+    norm_x = px / img_w
+    norm_y = py / img_h
     ax_pos = ax.get_position()
     if not (ax_pos.x0 <= norm_x <= ax_pos.x0 + ax_pos.width):
         return None
@@ -342,23 +349,26 @@ def _pixel_to_data(
 
 def _find_nearest_label(data_x: float, data_y: float, ax) -> dict | None:
     """Return a selection dict for the label nearest the click, or None."""
-    # Check preset dim line label bboxes (padded hit area)
-    pad = 0.15
+    # Check preset dim line label bboxes (padded hit area — ~20 display px)
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+    view_range_x = abs(xlim[1] - xlim[0])
+    view_range_y = abs(ylim[1] - ylim[0])
+    pad_x = view_range_x * 0.05
+    pad_y = view_range_y * 0.05
     for i, (bx0, by0, bx1, by1) in enumerate(core._standalone_dim_label_bboxes):
-        x_lo = min(bx0, bx1) - pad
-        x_hi = max(bx0, bx1) + pad
-        y_lo = min(by0, by1) - pad
-        y_hi = max(by0, by1) + pad
+        x_lo = min(bx0, bx1) - pad_x
+        x_hi = max(bx0, bx1) + pad_x
+        y_lo = min(by0, by1) - pad_y
+        y_hi = max(by0, by1) + pad_y
         if x_lo <= data_x <= x_hi and y_lo <= data_y <= y_hi:
             if i < len(core.standalone_dim_lines):
                 dim = core.standalone_dim_lines[i]
                 return {"type": "preset_dl", "idx": i, "name": dim["text"]}
 
-    # Check built-in labels from auto_positions (distance threshold)
-    xlim = ax.get_xlim()
-    ylim = ax.get_ylim()
-    view_range = max(xlim[1] - xlim[0], ylim[1] - ylim[0])
-    threshold = max(0.5, view_range * 0.08)
+    # Check built-in labels from auto_positions (distance threshold ~5% of view)
+    view_range = max(view_range_x, view_range_y)
+    threshold = view_range * 0.05
 
     best_key, best_dist = None, float("inf")
     for key, pos in core.label_manager.auto_positions.items():
@@ -1039,7 +1049,10 @@ pil_img = _PILImage.open(buf)
 
 coords = streamlit_image_coordinates(pil_img, key="canvas_click", use_column_width=True)
 if coords and ax:
-    pos = _pixel_to_data(coords["x"], coords["y"], fig, ax)
+    pos = _pixel_to_data(
+        coords["x"], coords["y"], fig, ax,
+        img_w=coords.get("width"), img_h=coords.get("height"),
+    )
     if pos is not None and pos != st.session_state.last_click_pos:
         st.session_state.last_click_pos = pos
         ann = _find_nearest_label(pos[0], pos[1], ax)
@@ -1049,14 +1062,3 @@ if coords and ax:
         if ann != prev_ann:
             st.rerun()
 
-with st.expander("🐛 Debug info", expanded=False):
-    st.write("**raw coords:**", coords)
-    if coords and ax:
-        pos_dbg = _pixel_to_data(coords["x"], coords["y"], fig, ax)
-        st.write("**_pixel_to_data:**", pos_dbg)
-        st.write("**ax xlim/ylim:**", ax.get_xlim(), ax.get_ylim())
-        st.write("**ax position:**", ax.get_position().bounds)
-    st.write("**auto_positions:**", {k: (round(v[0],3), round(v[1],3)) for k, v in core.label_manager.auto_positions.items()})
-    st.write("**dim_label_bboxes:**", [(round(b[0],3), round(b[1],3), round(b[2],3), round(b[3],3)) for b in core._standalone_dim_label_bboxes])
-    st.write("**selected_annotation:**", st.session_state.get("selected_annotation"))
-    st.write("**last_click_pos:**", st.session_state.get("last_click_pos"))
