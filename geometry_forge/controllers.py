@@ -110,9 +110,7 @@ class PlotController:
         self.ax.set_yticks([])
         self.ax.set_facecolor('white')
         for spine in self.ax.spines.values():
-            spine.set_visible(True)
-            spine.set_edgecolor('black')
-            spine.set_linewidth(1.0)
+            spine.set_visible(False)
 
     def draw_shape(self, shape: str, ctx: DrawingContext,
                    transform: TransformState, params: dict) -> str | None:
