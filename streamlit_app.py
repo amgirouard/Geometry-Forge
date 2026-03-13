@@ -497,37 +497,42 @@ with st.sidebar:
             core.transform_controller.reset()
             st.rerun()
 
-    # ── 5. Shape Parameters ────────────────────────────────────────────────────
+    # ── 5. Shape Parameters — only shown in Custom mode (or no dimension mode) ──
     if config and not is_composite:
-        if core.dimension_mode == "Custom" and config.custom_labels:
-            active_labels = config.custom_labels
-            default_vals = config.custom_values
-        else:
-            active_labels = config.labels
-            default_vals = config.default_values
+        # For shapes with a dimension mode, only show params in Custom mode.
+        # For shapes without a dimension mode, always show params.
+        show_params = (not config.has_dimension_mode) or (core.dimension_mode == "Custom")
 
-        if active_labels:
-            st.subheader("Parameters")
-            params_changed = False
-            for lbl, default_val in zip(active_labels, default_vals):
-                current_val = core.params.get(lbl, default_val)
-                pl, pi = st.columns([2, 1])
-                with pl:
-                    st.write(lbl)
-                with pi:
-                    new_val = st.text_input(
-                        lbl,
-                        value=current_val,
-                        key=f"param_{shape}_{core.triangle_type}_{core.dimension_mode}_{lbl}",
-                        label_visibility="collapsed",
-                    )
-                if new_val != current_val:
-                    params_changed = True
-                    core.params[lbl] = new_val
-            if params_changed:
-                capture_state()
+        if show_params:
+            if core.dimension_mode == "Custom" and config.custom_labels:
+                active_labels = config.custom_labels
+                default_vals = config.custom_values
+            else:
+                active_labels = config.labels
+                default_vals = config.default_values
 
-    # ── 6. Sliders ─────────────────────────────────────────────────────────────
+            if active_labels:
+                st.subheader("Parameters")
+                params_changed = False
+                for lbl, default_val in zip(active_labels, default_vals):
+                    current_val = core.params.get(lbl, default_val)
+                    pl, pi = st.columns([2, 1])
+                    with pl:
+                        st.write(lbl)
+                    with pi:
+                        new_val = st.text_input(
+                            lbl,
+                            value=current_val,
+                            key=f"param_{shape}_{core.triangle_type}_{core.dimension_mode}_{lbl}",
+                            label_visibility="collapsed",
+                        )
+                    if new_val != current_val:
+                        params_changed = True
+                        core.params[lbl] = new_val
+                if params_changed:
+                    capture_state()
+
+    # ── 6. Sliders — Adjust Shape/Slope/Peak only in Default mode ──────────────
     if config and not is_composite and shape:
         slider_config = config  # already triangle sub-config if applicable
 
@@ -535,10 +540,13 @@ with st.sidebar:
         has_slider_slope = slider_config.has_feature(ShapeFeature.SLIDER_SLOPE)
         has_slider_peak = slider_config.has_feature(ShapeFeature.SLIDER_PEAK)
 
-        if has_slider_shape or has_slider_slope or has_slider_peak:
+        # Only show adjust sliders in Default mode (or shapes without dimension mode)
+        show_adjust = (not config.has_dimension_mode) or (core.dimension_mode == "Default")
+
+        if show_adjust and (has_slider_shape or has_slider_slope or has_slider_peak):
             st.subheader("Adjust Shape")
 
-        if has_slider_shape:
+        if show_adjust and has_slider_shape:
             spec = core.scale_manager.specs["aspect"]
             new_aspect = st.slider(
                 "Adjust Shape",
@@ -551,7 +559,7 @@ with st.sidebar:
             if abs(new_aspect - core.scale_manager.get("aspect")) > 0.001:
                 core.scale_manager.set("aspect", new_aspect)
 
-        if has_slider_slope:
+        if show_adjust and has_slider_slope:
             spec = core.scale_manager.specs["slope"]
             new_slope = st.slider(
                 "Adjust Slope",
@@ -564,7 +572,7 @@ with st.sidebar:
             if abs(new_slope - core.scale_manager.get("slope")) > 0.001:
                 core.scale_manager.set("slope", new_slope)
 
-        if has_slider_peak:
+        if show_adjust and has_slider_peak:
             spec = core.scale_manager.specs["peak_offset"]
             new_peak = st.slider(
                 "Peak Offset",
@@ -642,27 +650,29 @@ with st.sidebar:
     # ── 11. Appearance ─────────────────────────────────────────────────────────
     st.subheader("Appearance")
 
-    new_font_size = st.slider(
-        "Font Size",
-        min_value=AppConstants.MIN_FONT_SIZE,
-        max_value=AppConstants.MAX_FONT_SIZE,
-        value=core.font_size,
-        step=1,
-        key="sl_font_size",
-    )
-    if new_font_size != core.font_size:
-        core.font_size = new_font_size
-
-    font_families = ["serif", "sans-serif", "monospace"]
-    ff_idx = (
-        font_families.index(core.font_family)
-        if core.font_family in font_families else 0
-    )
-    new_ff = st.selectbox(
-        "Font Family", font_families, index=ff_idx, key="sb_font_family"
-    )
-    if new_ff != core.font_family:
-        core.font_family = new_ff
+    fa_col, fb_col = st.columns([1, 2])
+    with fa_col:
+        new_font_size = st.slider(
+            "Font Size",
+            min_value=AppConstants.MIN_FONT_SIZE,
+            max_value=AppConstants.MAX_FONT_SIZE,
+            value=core.font_size,
+            step=1,
+            key="sl_font_size",
+        )
+        if new_font_size != core.font_size:
+            core.font_size = new_font_size
+    with fb_col:
+        font_families = ["serif", "sans-serif", "monospace"]
+        ff_idx = (
+            font_families.index(core.font_family)
+            if core.font_family in font_families else 0
+        )
+        new_ff = st.selectbox(
+            "Font Family", font_families, index=ff_idx, key="sb_font_family"
+        )
+        if new_ff != core.font_family:
+            core.font_family = new_ff
 
     new_lw = st.slider(
         "Line Width",

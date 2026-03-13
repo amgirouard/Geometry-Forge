@@ -592,8 +592,10 @@ class GeometryCore:
                 if fresh:
                     old_mx = (dim["x1"] + dim["x2"]) / 2
                     old_my = (dim["y1"] + dim["y2"]) / 2
-                    lbl_dx = dim.get("label_x", old_mx) - old_mx
-                    lbl_dy = dim.get("label_y", old_my) - old_my
+                    _lx = dim.get("label_x")
+                    _ly = dim.get("label_y")
+                    lbl_dx = (_lx - old_mx) if _lx is not None else 0.0
+                    lbl_dy = (_ly - old_my) if _ly is not None else 0.0
                     dim["x1"], dim["y1"] = fresh["x1"], fresh["y1"]
                     dim["x2"], dim["y2"] = fresh["x2"], fresh["y2"]
                     new_mx = (fresh["x1"] + fresh["x2"]) / 2
@@ -607,8 +609,10 @@ class GeometryCore:
             for px, py in [(x1, y1), (x2, y2)]:
                 self.ax.plot(px, py, marker="o", markersize=3, color=color, zorder=13)
 
-            label_x = dim.get("label_x", (x1 + x2) / 2)
-            label_y = dim.get("label_y", (y1 + y2) / 2)
+            _raw_lx = dim.get("label_x")
+            _raw_ly = dim.get("label_y")
+            label_x = _raw_lx if _raw_lx is not None else (x1 + x2) / 2
+            label_y = _raw_ly if _raw_ly is not None else (y1 + y2) / 2
             dim_lbl_txt = self.ax.text(label_x, label_y, dim["text"],
                         fontsize=font_size, color=color, fontweight="normal",
                         fontfamily=self.font_family,
@@ -1020,8 +1024,10 @@ class GeometryCore:
                     if fresh:
                         old_mx = (dim["x1"] + dim["x2"]) / 2
                         old_my = (dim["y1"] + dim["y2"]) / 2
-                        lbl_dx = dim.get("label_x", old_mx) - old_mx
-                        lbl_dy = dim.get("label_y", old_my) - old_my
+                        _lx = dim.get("label_x")
+                        _ly = dim.get("label_y")
+                        lbl_dx = (_lx - old_mx) if _lx is not None else 0.0
+                        lbl_dy = (_ly - old_my) if _ly is not None else 0.0
                         dim["x1"], dim["y1"] = fresh["x1"], fresh["y1"]
                         dim["x2"], dim["y2"] = fresh["x2"], fresh["y2"]
                         new_mx = (fresh["x1"] + fresh["x2"]) / 2
@@ -1035,8 +1041,10 @@ class GeometryCore:
             for px, py in [(x1, y1), (x2, y2)]:
                 self.ax.plot(px, py, marker="o", markersize=3, color=color, zorder=13)
 
-            label_x = dim.get("label_x", (x1 + x2) / 2)
-            label_y = dim.get("label_y", (y1 + y2) / 2)
+            _raw_lx = dim.get("label_x")
+            _raw_ly = dim.get("label_y")
+            label_x = _raw_lx if _raw_lx is not None else (x1 + x2) / 2
+            label_y = _raw_ly if _raw_ly is not None else (y1 + y2) / 2
             dim_txt = self.ax.text(label_x, label_y, dim["text"],
                         fontsize=font_size, color=color, fontweight="normal",
                         fontfamily=self.font_family,
