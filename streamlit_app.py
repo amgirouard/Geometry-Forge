@@ -207,10 +207,16 @@ def _render_preset_dim_lines(core: GeometryCore, shape: str, capture_fn) -> None
 def _get_relevant_toggle_keys(shape: str, config) -> list[tuple[str, str]]:
     """Return TOGGLE_LABEL_KEYS subset that applies to the current shape."""
     TOGGLE_SHAPE_MAP: dict[str, set[str]] = {
-        "Circumference": {"Circle", "Sphere", "Cylinder", "Cone", "Hemisphere"},
-        "Radius":        {"Circle", "Sphere", "Cylinder", "Cone", "Hemisphere"},
-        "Diameter":      {"Circle", "Sphere", "Cylinder", "Cone", "Hemisphere"},
-        "Height":        {"Cylinder", "Cone"},
+        "Circumference":  {"Circle", "Sphere", "Cylinder", "Cone", "Hemisphere"},
+        "Radius":         {"Circle", "Sphere", "Cylinder", "Cone", "Hemisphere"},
+        "Diameter":       {"Circle", "Sphere", "Cylinder", "Cone", "Hemisphere"},
+        "Height":         {"Cylinder", "Cone"},
+        "Slant":          {"Cone"},
+        "Length (Front)": {"Rectangular Prism"},
+        "Width (Side)":   {"Rectangular Prism"},
+        "Base (Tri)":     {"Triangular Prism"},
+        "Height (Tri)":   {"Triangular Prism"},
+        "Length (Prism)": {"Triangular Prism"},
     }
     result = []
     for lbl_key, st_key in GeometryCore.TOGGLE_LABEL_KEYS:
