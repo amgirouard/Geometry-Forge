@@ -102,30 +102,11 @@ _SHAPE_PRESET_DIM_LINES: dict[str, list[tuple[str, str, str]]] = {
         ("trap_side_l", "Left Leg", "c"),
         ("trap_side_r", "Right Leg","d"),
     ],
-    "Circle": [
-        ("radius",   "Radius",   "r"),
-        ("diameter", "Diameter", "d"),
-    ],
-    "Sphere": [
-        ("radius",   "Radius",   "r"),
-        ("diameter", "Diameter", "d"),
-    ],
-    "Hemisphere": [
-        ("radius",   "Radius",   "r"),
-        ("diameter", "Diameter", "d"),
-    ],
-    "Cylinder": [
-        ("radius",        "Radius",        "r"),
-        ("diameter",      "Diameter",      "d"),
-        ("height",        "Height",        "h"),
-        ("circumference", "Circumference", "C"),
-    ],
-    "Cone": [
-        ("radius",   "Radius",       "r"),
-        ("diameter", "Diameter",     "d"),
-        ("height",   "Height",       "h"),
-        ("slant",    "Slant Height", "l"),
-    ],
+    "Circle": [],
+    "Sphere": [],
+    "Hemisphere": [],
+    "Cylinder": [],
+    "Cone": [],
     "Rectangular Prism": [
         ("height", "Height", "h"),
         ("length", "Length", "l"),
@@ -232,16 +213,10 @@ def _render_preset_dim_lines(core: GeometryCore, shape: str, capture_fn) -> None
 def _get_relevant_toggle_keys(shape: str, config) -> list[tuple[str, str]]:
     """Return TOGGLE_LABEL_KEYS subset that applies to the current shape."""
     TOGGLE_SHAPE_MAP: dict[str, set[str]] = {
-        "Circumference":  {"Circle", "Sphere", "Cylinder", "Cone", "Hemisphere"},
-        "Radius":         {"Circle", "Sphere", "Cylinder", "Cone", "Hemisphere"},
-        "Diameter":       {"Circle", "Sphere", "Cylinder", "Cone", "Hemisphere"},
-        "Height":         {"Cylinder", "Cone"},
-        "Slant":          {"Cone"},
-        "Length (Front)": {"Rectangular Prism"},
-        "Width (Side)":   {"Rectangular Prism"},
-        "Base (Tri)":     {"Triangular Prism"},
-        "Height (Tri)":   {"Triangular Prism"},
-        "Length (Prism)": {"Triangular Prism"},
+        "Circumference": {"Circle", "Sphere", "Cylinder", "Cone", "Hemisphere"},
+        "Radius":        {"Circle", "Sphere", "Cylinder", "Cone", "Hemisphere"},
+        "Diameter":      {"Circle", "Sphere", "Cylinder", "Cone", "Hemisphere"},
+        "Height":        {"Cylinder", "Cone"},
     }
     result = []
     for lbl_key, st_key in GeometryCore.TOGGLE_LABEL_KEYS:
@@ -633,7 +608,7 @@ with st.sidebar:
             st.caption(config.help_text)
 
     # ── 4. Shape Parameters — only shown in Custom mode (or no dimension mode) ──
-    _SHAPES_NO_PARAMS = {"Circle", "Square", "Polygon", "Sphere"}
+    _SHAPES_NO_PARAMS = {"Circle", "Square", "Polygon", "Sphere", "Hemisphere"}
     _is_equilateral = (shape == "Triangle" and core.triangle_type == "Equilateral")
     if config and not is_composite and shape not in _SHAPES_NO_PARAMS and not _is_equilateral:
         # For shapes with a dimension mode, only show params in Custom mode.

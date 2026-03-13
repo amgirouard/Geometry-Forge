@@ -134,7 +134,7 @@ class GeometryCore:
 
         # ── Matplotlib figure ─────────────────────────────────────────────────
         self.fig = Figure(figsize=(9.7, 7.27), facecolor="white")
-        self.fig.subplots_adjust(left=0.01, right=0.99, top=0.99, bottom=0.01)
+        self.fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
         self.ax = self.fig.add_subplot(111)
         self.plot_controller = PlotController(
             fig=self.fig,
@@ -1280,8 +1280,13 @@ class GeometryCore:
                                         offset, label_gap, shape_cx, shape_cy)
             if res: return res
         if "prism_tri_p1" in hints:
-            foot = hints["tri_foot"]; apex = hints["tri_apex"]
             p1, p2, p3 = hints["prism_tri_p1"], hints["prism_tri_p2"], hints["prism_tri_p3"]
+            # Compute altitude foot: project p3 onto the p1→p2 base edge
+            bdx, bdy = p2[0] - p1[0], p2[1] - p1[1]
+            base_len_sq = bdx**2 + bdy**2 or 1
+            t = ((p3[0] - p1[0]) * bdx + (p3[1] - p1[1]) * bdy) / base_len_sq
+            foot = (p1[0] + t * bdx, p1[1] + t * bdy)
+            apex = p3
             mid_x = (foot[0] + apex[0]) / 2; mid_y = (foot[1] + apex[1]) / 2
             dx = apex[0] - foot[0]; dy = apex[1] - foot[1]
             seg_len = math.sqrt(dx**2 + dy**2) or 1
