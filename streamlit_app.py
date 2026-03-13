@@ -413,12 +413,23 @@ def _label_canvas_x_frac(annotation: dict, fig, ax) -> float:
 
 
 def _render_nudge_panel(fig, ax, capture_fn) -> None:
-    """Render arrow-nudge controls below the canvas, positioned under the selected label."""
+    """Render compact arrow-nudge controls, positioned above the selected label."""
     ann = st.session_state.get("selected_annotation")
     if not ann:
         return
 
-    step = st.session_state.get("nudge_step", 0.3)
+    # Scale step to 1%/2.5%/6% of the visible data range so nudges feel
+    # proportional regardless of shape size.
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+    view_range = max(abs(xlim[1] - xlim[0]), abs(ylim[1] - ylim[0]))
+    step_key = st.session_state.get("nudge_step_key", "Medium")
+    step_values = {
+        "Small":  view_range * 0.01,
+        "Medium": view_range * 0.025,
+        "Large":  view_range * 0.06,
+    }
+    step = step_values[step_key]
 
     def _nudge_builtin(dx: float, dy: float) -> None:
         key = ann["key"]
@@ -457,9 +468,11 @@ def _render_nudge_panel(fig, ax, capture_fn) -> None:
             dim["label_y"] += dy
         dim["user_dragged"] = True
 
-    # Column layout: position panel under the label's x position
+    _nudge_label = _nudge_builtin if ann["type"] == "builtin" else _nudge_dl_label
+
+    # Horizontally position panel under the label's x position
     x_frac = _label_canvas_x_frac(ann, fig, ax)
-    panel_w = 0.18
+    panel_w = 0.40
     left_w = max(0.01, x_frac - panel_w / 2)
     right_w = max(0.01, 1.0 - x_frac - panel_w / 2)
     total = left_w + panel_w + right_w
@@ -467,46 +480,38 @@ def _render_nudge_panel(fig, ax, capture_fn) -> None:
 
     with pcol:
         with st.container(border=True):
-            hc1, hc2 = st.columns([4, 1])
+            # ── Header: name | step radio | close ──
+            hc1, hc2, hc3 = st.columns([2, 4, 1])
             with hc1:
                 st.caption(f"**{ann['name']}**")
             with hc2:
+                new_step_key = st.radio(
+                    "Step", ["Small", "Medium", "Large"],
+                    index=["Small", "Medium", "Large"].index(step_key),
+                    horizontal=True,
+                    label_visibility="collapsed",
+                    key="nudge_step_radio",
+                )
+                if new_step_key != step_key:
+                    st.session_state.nudge_step_key = new_step_key
+                    st.rerun()
+            with hc3:
                 if st.button("✕", key="btn_nudge_close"):
                     core.label_manager.builtin_selected = None
                     st.session_state.selected_annotation = None
                     st.rerun()
 
-            # Step size
-            step_options = ["Small", "Medium", "Large"]
-            step_values = {"Small": 0.1, "Medium": 0.3, "Large": 0.7}
-            cur_label = "Small" if step <= 0.15 else "Medium" if step <= 0.5 else "Large"
-            new_step_label = st.radio(
-                "Step",
-                step_options,
-                index=step_options.index(cur_label),
-                horizontal=True,
-                label_visibility="collapsed",
-                key="nudge_step_radio",
-            )
-            if step_values[new_step_label] != step:
-                st.session_state.nudge_step = step_values[new_step_label]
-                st.rerun()
-
-            # ── Label nudge arrows ──
-            st.caption("Label")
-            _nudge_label = _nudge_builtin if ann["type"] == "builtin" else _nudge_dl_label
-
-            _, uc, _ = st.columns(3)
-            with uc:
+            # ── Label arrows: horizontal row  ↑ ← ○ → ↓ ──
+            la, lb, lc, ld, le, lf = st.columns([2, 1, 1, 1, 1, 1])
+            with la:
+                st.caption("Label")
+            with lb:
                 if st.button("↑", key="nl_u", use_container_width=True):
-                    _nudge_label(0, step)
-                    st.rerun()
-            lc, cc, rc = st.columns(3)
+                    _nudge_label(0, step); st.rerun()
             with lc:
                 if st.button("←", key="nl_l", use_container_width=True):
-                    _nudge_label(-step, 0)
-                    st.rerun()
-            with cc:
+                    _nudge_label(-step, 0); st.rerun()
+            with ld:
                 if st.button("○", key="nl_reset", use_container_width=True, help="Reset label"):
                     capture_fn()
                     if ann["type"] == "builtin":
@@ -516,30 +521,25 @@ def _render_nudge_panel(fig, ax, capture_fn) -> None:
                         dim["label_x"] = None
                         dim["label_y"] = None
                     st.rerun()
-            with rc:
+            with le:
                 if st.button("→", key="nl_r", use_container_width=True):
-                    _nudge_label(step, 0)
-                    st.rerun()
-            _, dc, _ = st.columns(3)
-            with dc:
+                    _nudge_label(step, 0); st.rerun()
+            with lf:
                 if st.button("↓", key="nl_d", use_container_width=True):
-                    _nudge_label(0, -step)
-                    st.rerun()
+                    _nudge_label(0, -step); st.rerun()
 
-            # ── Line nudge arrows (preset dim lines only) ──
+            # ── Line arrows (preset dim lines only) ──
             if ann["type"] == "preset_dl":
-                st.caption("Line")
-                _, luc, _ = st.columns(3)
-                with luc:
+                ma, mb, mc, md, me, mf = st.columns([2, 1, 1, 1, 1, 1])
+                with ma:
+                    st.caption("Line")
+                with mb:
                     if st.button("↑", key="line_u", use_container_width=True):
-                        _nudge_dl_line(0, step)
-                        st.rerun()
-                llc, lcc, lrc = st.columns(3)
-                with llc:
+                        _nudge_dl_line(0, step); st.rerun()
+                with mc:
                     if st.button("←", key="line_l", use_container_width=True):
-                        _nudge_dl_line(-step, 0)
-                        st.rerun()
-                with lcc:
+                        _nudge_dl_line(-step, 0); st.rerun()
+                with md:
                     if st.button("○", key="line_reset", use_container_width=True, help="Reset line"):
                         capture_fn()
                         dim = core.standalone_dim_lines[ann["idx"]]
@@ -547,15 +547,12 @@ def _render_nudge_panel(fig, ax, capture_fn) -> None:
                         dim["label_x"] = None
                         dim["label_y"] = None
                         st.rerun()
-                with lrc:
+                with me:
                     if st.button("→", key="line_r", use_container_width=True):
-                        _nudge_dl_line(step, 0)
-                        st.rerun()
-                _, ldc, _ = st.columns(3)
-                with ldc:
+                        _nudge_dl_line(step, 0); st.rerun()
+                with mf:
                     if st.button("↓", key="line_d", use_container_width=True):
-                        _nudge_dl_line(0, -step)
-                        st.rerun()
+                        _nudge_dl_line(0, -step); st.rerun()
 
 
 
