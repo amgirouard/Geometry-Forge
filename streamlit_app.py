@@ -108,14 +108,12 @@ _SHAPE_PRESET_DIM_LINES: dict[str, list[tuple[str, str, str]]] = {
         ("trap_side_r", "Right Leg","d"),
     ],
     "Circle": [
-        ("radius",        "Radius",        "r"),
-        ("diameter",      "Diameter",      "d"),
-        ("circumference", "Circumference", "C"),
+        ("radius",   "Radius",   "r"),
+        ("diameter", "Diameter", "d"),
     ],
     "Sphere": [
-        ("radius",        "Radius",        "r"),
-        ("diameter",      "Diameter",      "d"),
-        ("circumference", "Circumference", "C"),
+        ("radius",   "Radius",   "r"),
+        ("diameter", "Diameter", "d"),
     ],
     "Hemisphere": [
         ("radius",   "Radius",   "r"),
@@ -624,56 +622,9 @@ with st.sidebar:
         if config.help_text:
             st.caption(config.help_text)
 
-    # ── 4. Transforms ──────────────────────────────────────────────────────────
-    if config and not is_composite and (
-        config.has_feature(ShapeFeature.FLIP) or config.has_feature(ShapeFeature.ROTATE)
-    ):
-        st.subheader("Transforms")
-
-        if config.has_feature(ShapeFeature.FLIP):
-            c1, c2 = st.columns(2)
-            with c1:
-                label_h = "↔ Flip H ✓" if core.transform_controller.flip_h else "↔ Flip H"
-                if st.button(label_h, key="btn_flip_h", width="stretch"):
-                    capture_state()
-                    core.transform_controller.flip_h = not core.transform_controller.flip_h
-                    st.rerun()
-            with c2:
-                label_v = "↕ Flip V ✓" if core.transform_controller.flip_v else "↕ Flip V"
-                if st.button(label_v, key="btn_flip_v", width="stretch"):
-                    capture_state()
-                    core.transform_controller.flip_v = not core.transform_controller.flip_v
-                    st.rerun()
-
-        if config.has_feature(ShapeFeature.ROTATE):
-            num_sides = config.num_sides if config.num_sides > 0 else 4
-            rot_labels = config.rotation_labels
-            current_side = core.transform_controller.base_side
-
-            if rot_labels and 0 <= current_side < len(rot_labels):
-                st.caption(f"Rotation: {rot_labels[current_side]}")
-            else:
-                st.caption(f"Rotation: position {current_side}")
-
-            c3, c4 = st.columns(2)
-            with c3:
-                if st.button("↺ CCW", key="btn_rot_ccw", width="stretch"):
-                    capture_state()
-                    core.transform_controller.rotate(-1, num_sides)
-                    st.rerun()
-            with c4:
-                if st.button("↻ CW", key="btn_rot_cw", width="stretch"):
-                    capture_state()
-                    core.transform_controller.rotate(1, num_sides)
-                    st.rerun()
-
-        if st.button("Reset Transforms", key="btn_reset_xf", width="stretch"):
-            capture_state()
-            core.transform_controller.reset()
-            st.rerun()
-
-    # ── 5. Shape Parameters — only shown in Custom mode (or no dimension mode) ──
-    if config and not is_composite:
+    # ── 4. Shape Parameters — only shown in Custom mode (or no dimension mode) ──
+    _SHAPES_NO_PARAMS = {"Circle", "Square", "Polygon"}
+    if config and not is_composite and shape not in _SHAPES_NO_PARAMS:
         # For shapes with a dimension mode, only show params in Custom mode.
         # For shapes without a dimension mode, always show params.
         show_params = (not config.has_dimension_mode) or (core.dimension_mode == "Custom")
@@ -707,7 +658,7 @@ with st.sidebar:
                 if params_changed:
                     capture_state()
 
-    # ── 6. Sliders — Adjust Shape/Slope/Peak only in Default mode ──────────────
+    # ── 5. Sliders — Adjust Shape/Slope/Peak only in Default mode ──────────────
     if config and not is_composite and shape:
         slider_config = config  # already triangle sub-config if applicable
 
@@ -774,6 +725,54 @@ with st.sidebar:
             if abs(new_view - core.scale_manager.get("view_scale")) > 0.001:
                 core.scale_manager.set("view_scale", new_view)
 
+    # ── 6. Transformations ─────────────────────────────────────────────────────
+    if config and not is_composite and (
+        config.has_feature(ShapeFeature.FLIP) or config.has_feature(ShapeFeature.ROTATE)
+    ):
+        st.subheader("Transformations")
+
+        if config.has_feature(ShapeFeature.FLIP):
+            c1, c2 = st.columns(2)
+            with c1:
+                label_h = "↔ Flip H ✓" if core.transform_controller.flip_h else "↔ Flip H"
+                if st.button(label_h, key="btn_flip_h", width="stretch"):
+                    capture_state()
+                    core.transform_controller.flip_h = not core.transform_controller.flip_h
+                    st.rerun()
+            with c2:
+                label_v = "↕ Flip V ✓" if core.transform_controller.flip_v else "↕ Flip V"
+                if st.button(label_v, key="btn_flip_v", width="stretch"):
+                    capture_state()
+                    core.transform_controller.flip_v = not core.transform_controller.flip_v
+                    st.rerun()
+
+        if config.has_feature(ShapeFeature.ROTATE):
+            num_sides = config.num_sides if config.num_sides > 0 else 4
+            rot_labels = config.rotation_labels
+            current_side = core.transform_controller.base_side
+
+            if rot_labels and 0 <= current_side < len(rot_labels):
+                st.caption(f"Rotation: {rot_labels[current_side]}")
+            else:
+                st.caption(f"Rotation: position {current_side}")
+
+            c3, c4 = st.columns(2)
+            with c3:
+                if st.button("↺ CCW", key="btn_rot_ccw", width="stretch"):
+                    capture_state()
+                    core.transform_controller.rotate(-1, num_sides)
+                    st.rerun()
+            with c4:
+                if st.button("↻ CW", key="btn_rot_cw", width="stretch"):
+                    capture_state()
+                    core.transform_controller.rotate(1, num_sides)
+                    st.rerun()
+
+        if st.button("Reset Transformations", key="btn_reset_xf", width="stretch"):
+            capture_state()
+            core.transform_controller.reset()
+            st.rerun()
+
     # ── 7. Preset Dimension Lines ──────────────────────────────────────────────
     if shape and not is_composite:
         _render_preset_dim_lines(core, shape, capture_state)
@@ -784,7 +783,8 @@ with st.sidebar:
         if relevant_toggles:
             st.subheader("Dimension Labels")
             for lbl_key, st_key in relevant_toggles:
-                cur_text = core.label_manager.label_texts.get(lbl_key, "")
+                stored_text = core.label_manager.label_texts.get(lbl_key, "")
+                cur_text = stored_text if stored_text else lbl_key
                 cur_vis = core.label_manager.label_visibility.get(lbl_key, False)
 
                 tc, ti = st.columns([2, 1])
@@ -802,8 +802,10 @@ with st.sidebar:
 
                 if new_vis != cur_vis or new_text != cur_text:
                     capture_state()
-                    if new_vis or new_text:
-                        core.label_manager.set_label_text(lbl_key, new_text, new_vis)
+                    # Use lbl_key as fallback display text when user leaves the field empty
+                    display_text = new_text.strip() if new_text.strip() else lbl_key
+                    if new_vis or new_text.strip():
+                        core.label_manager.set_label_text(lbl_key, display_text, new_vis)
                     else:
                         core.label_manager.label_texts.pop(lbl_key, None)
                         core.label_manager.label_visibility.pop(lbl_key, None)
@@ -827,9 +829,10 @@ with st.sidebar:
         _render_annotation_controls(core, capture_state)
 
     # ── 12. Appearance ─────────────────────────────────────────────────────────
+    st.divider()
     st.subheader("Appearance")
 
-    fa_col, fb_col = st.columns([1, 2])
+    fa_col, fb_col = st.columns([2, 1])
     with fa_col:
         new_font_size = st.slider(
             "Font Size",
@@ -865,6 +868,7 @@ with st.sidebar:
         core.line_width = new_lw
 
     # ── 13. Actions ────────────────────────────────────────────────────────────
+    st.divider()
     st.subheader("Actions")
     ca, cb = st.columns(2)
     with ca:
@@ -880,7 +884,7 @@ with st.sidebar:
             do_redo()
             st.rerun()
 
-    if st.button("🔄 Reset All", key="btn_reset_all", width="stretch"):
+    if st.button("↺ Reset All", key="btn_reset_all", width="stretch"):
         capture_state()
         core.reset_all()
         st.rerun()
