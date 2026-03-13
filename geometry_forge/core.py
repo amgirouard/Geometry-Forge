@@ -592,8 +592,12 @@ class GeometryCore:
                 if fresh:
                     old_mx = (dim["x1"] + dim["x2"]) / 2
                     old_my = (dim["y1"] + dim["y2"]) / 2
-                    lbl_dx = dim.get("label_x", old_mx) - old_mx
-                    lbl_dy = dim.get("label_y", old_my) - old_my
+                    # Use None-safe fallback: dict.get returns None when key
+                    # exists with value None, so check explicitly.
+                    stored_lx = dim.get("label_x")
+                    stored_ly = dim.get("label_y")
+                    lbl_dx = (stored_lx if stored_lx is not None else old_mx) - old_mx
+                    lbl_dy = (stored_ly if stored_ly is not None else old_my) - old_my
                     dim["x1"], dim["y1"] = fresh["x1"], fresh["y1"]
                     dim["x2"], dim["y2"] = fresh["x2"], fresh["y2"]
                     new_mx = (fresh["x1"] + fresh["x2"]) / 2

@@ -22,6 +22,181 @@ st.set_page_config(
 
 # ── Helper functions ──────────────────────────────────────────────────────────
 
+# Preset dim line definitions per shape.
+# Each entry: (preset_key, display_label, default_text)
+# preset_key must match a key in GeometryCore._dim_dispatch.
+_SHAPE_PRESET_DIM_LINES: dict[str, list[tuple[str, str, str]]] = {
+    "Rectangle": [
+        ("height", "Height", "h"),
+        ("width",  "Width",  "w"),
+        ("side_v", "Right Side", "b"),
+        ("side_h", "Bottom Side", "a"),
+    ],
+    "Square": [
+        ("height", "Height", "a"),
+        ("width",  "Width",  "a"),
+        ("side_v", "Right Side", "a"),
+        ("side_h", "Bottom Side", "a"),
+    ],
+    "Triangle_Custom": [
+        ("height", "Height",     "h"),
+        ("width",  "Base Width", "b"),
+        ("side_l", "Left Side",  "c"),
+        ("side_r", "Right Side", "a"),
+    ],
+    "Triangle_Isosceles": [
+        ("height", "Height",     "h"),
+        ("width",  "Base Width", "a"),
+        ("side_l", "Left Side",  "b"),
+        ("side_r", "Right Side", "b"),
+    ],
+    "Triangle_Scalene": [
+        ("height", "Height",     "h"),
+        ("width",  "Base Width", "a"),
+        ("side_l", "Left Side",  "b"),
+        ("side_r", "Right Side", "c"),
+    ],
+    "Triangle_Equilateral": [
+        ("height", "Height",     "h"),
+        ("width",  "Base Width", "a"),
+        ("side_l", "Left Side",  "a"),
+        ("side_r", "Right Side", "a"),
+    ],
+    "Triangle_Right": [
+        ("leg_a", "Leg A",       "a"),
+        ("leg_b", "Leg B",       "b"),
+        ("hyp",   "Hypotenuse",  "c"),
+        ("height","Height",      "h"),
+    ],
+    "Parallelogram": [
+        ("para_height", "Height",     "h"),
+        ("para_base",   "Base",       "a"),
+        ("para_top",    "Top",        "a"),
+        ("para_side_l", "Left Side",  "b"),
+        ("para_side_r", "Right Side", "b"),
+    ],
+    "Trapezoid": [
+        ("trap_height", "Height",   "h"),
+        ("trap_base",   "Bottom",   "b"),
+        ("trap_top",    "Top",      "a"),
+        ("trap_side_l", "Left Leg", "c"),
+        ("trap_side_r", "Right Leg","d"),
+    ],
+    "Circle": [
+        ("radius",        "Radius",        "r"),
+        ("diameter",      "Diameter",      "d"),
+        ("circumference", "Circumference", "C"),
+    ],
+    "Sphere": [
+        ("radius",        "Radius",        "r"),
+        ("diameter",      "Diameter",      "d"),
+        ("circumference", "Circumference", "C"),
+    ],
+    "Hemisphere": [
+        ("radius",   "Radius",   "r"),
+        ("diameter", "Diameter", "d"),
+    ],
+    "Cylinder": [
+        ("radius",        "Radius",        "r"),
+        ("diameter",      "Diameter",      "d"),
+        ("height",        "Height",        "h"),
+        ("circumference", "Circumference", "C"),
+    ],
+    "Cone": [
+        ("radius",   "Radius",       "r"),
+        ("diameter", "Diameter",     "d"),
+        ("height",   "Height",       "h"),
+        ("slant",    "Slant Height", "l"),
+    ],
+    "Rectangular Prism": [
+        ("height", "Height", "h"),
+        ("length", "Length", "l"),
+        ("width",  "Width",  "w"),
+    ],
+    "Triangular Prism": [
+        ("height",     "Height",         "h"),
+        ("tri_base",   "Triangle Base",  "b"),
+        ("tri_length", "Prism Length",   "l"),
+    ],
+    "Polygon": [
+        ("side", "Side Length", "a"),
+    ],
+    "Line Segment": [
+        ("width", "Length", "l"),
+    ],
+}
+
+
+def _get_preset_dim_lines(shape: str, triangle_type: str) -> list[tuple[str, str, str]]:
+    """Return the preset dim line specs for the current shape (and triangle sub-type)."""
+    if shape == "Triangle":
+        key = f"Triangle_{triangle_type}"
+        return _SHAPE_PRESET_DIM_LINES.get(key, _SHAPE_PRESET_DIM_LINES.get("Triangle_Custom", []))
+    return _SHAPE_PRESET_DIM_LINES.get(shape, [])
+
+
+def _preset_exists(core: GeometryCore, preset_key: str) -> int:
+    """Return the index of an existing preset dim line, or -1 if not present."""
+    for i, dl in enumerate(core.standalone_dim_lines):
+        if dl.get("preset_key") == preset_key:
+            return i
+    return -1
+
+
+def _render_preset_dim_lines(core: GeometryCore, shape: str, capture_fn) -> None:
+    """Render the preset dimension line checkboxes + label text inputs."""
+    specs = _get_preset_dim_lines(shape, core.triangle_type)
+    if not specs:
+        return
+    st.subheader("Dimension Lines")
+    changed = False
+    for preset_key, display_label, default_text in specs:
+        idx = _preset_exists(core, preset_key)
+        cur_checked = idx >= 0
+        cur_text = core.standalone_dim_lines[idx]["text"] if cur_checked else default_text
+
+        col_chk, col_txt = st.columns([1, 2])
+        with col_chk:
+            new_checked = st.checkbox(
+                display_label,
+                value=cur_checked,
+                key=f"preset_dl_chk_{shape}_{preset_key}",
+            )
+        with col_txt:
+            new_text = st.text_input(
+                "Label",
+                value=cur_text,
+                key=f"preset_dl_txt_{shape}_{preset_key}",
+                label_visibility="collapsed",
+                placeholder=default_text,
+                disabled=not new_checked,
+            )
+
+        if new_checked and not cur_checked:
+            # Add preset dim line (endpoints will be computed on first draw)
+            capture_fn()
+            core.standalone_dim_lines.append({
+                "text": new_text or default_text,
+                "x1": 0.0, "y1": 0.0, "x2": 1.0, "y2": 0.0,
+                "label_x": None, "label_y": None,
+                "preset_key": preset_key,
+                "user_dragged": False,
+                "constraint": None,
+            })
+            changed = True
+        elif not new_checked and cur_checked:
+            capture_fn()
+            core.standalone_dim_lines.pop(idx)
+            changed = True
+        elif cur_checked and new_text != cur_text:
+            capture_fn()
+            core.standalone_dim_lines[idx]["text"] = new_text
+            changed = True
+
+    if changed:
+        st.rerun()
+
+
 def _get_relevant_toggle_keys(shape: str, config) -> list[tuple[str, str]]:
     """Return TOGGLE_LABEL_KEYS subset that applies to the current shape."""
     TOGGLE_SHAPE_MAP: dict[str, set[str]] = {
@@ -560,7 +735,11 @@ with st.sidebar:
         if abs(new_view - core.scale_manager.get("view_scale")) > 0.001:
             core.scale_manager.set("view_scale", new_view)
 
-    # ── 7. Toggle (Preset) Dimension Labels ────────────────────────────────────
+    # ── 7. Preset Dimension Lines ──────────────────────────────────────────────
+    if shape and not is_composite:
+        _render_preset_dim_lines(core, shape, capture_state)
+
+    # ── 8. Shape-Label Toggles ────────────────────────────────────
     if shape and not is_composite and config:
         relevant_toggles = _get_relevant_toggle_keys(shape, config)
         if relevant_toggles:
@@ -590,7 +769,7 @@ with st.sidebar:
                         core.label_manager.label_texts.pop(lbl_key, None)
                         core.label_manager.label_visibility.pop(lbl_key, None)
 
-    # ── 8. Hash Marks (Polygon only) ──────────────────────────────────────────
+    # ── 9. Hash Marks (Polygon only) ──────────────────────────────────────────
     if config and config.has_feature(ShapeFeature.HASH_MARKS):
         st.subheader("Options")
         new_hash = st.checkbox(
@@ -600,15 +779,15 @@ with st.sidebar:
             capture_state()
             core.show_hashmarks = new_hash
 
-    # ── 9. Composite Shape Controls ────────────────────────────────────────────
+    # ── 10. Composite Shape Controls ────────────────────────────────────────────
     if is_composite:
         _render_composite_controls(core, shape, capture_state)
 
-    # ── 10. Freeform Annotations (standalone mode only) ────────────────────────
+    # ── 11. Freeform Annotations (standalone mode only) ────────────────────────
     if shape and not is_composite:
         _render_annotation_controls(core, capture_state)
 
-    # ── 11. Appearance ─────────────────────────────────────────────────────────
+    # ── 12. Appearance ─────────────────────────────────────────────────────────
     st.subheader("Appearance")
 
     new_font_size = st.slider(
@@ -644,7 +823,7 @@ with st.sidebar:
     if new_lw != core.line_width:
         core.line_width = new_lw
 
-    # ── 12. Actions ────────────────────────────────────────────────────────────
+    # ── 13. Actions ────────────────────────────────────────────────────────────
     st.subheader("Actions")
     ca, cb = st.columns(2)
     with ca:
