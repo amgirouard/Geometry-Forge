@@ -8,7 +8,7 @@ import logging
 logging.basicConfig(level=logging.WARNING, format='%(levelname)s: %(message)s')
 logging.getLogger('matplotlib.font_manager').setLevel(logging.WARNING)
 
-# Enable High-DPI scaling for Windows
+# Enable High-DPI scaling for Windows (no-op on macOS/Linux)
 try:
     from ctypes import windll
     windll.shcore.SetProcessDpiAwareness(1)
@@ -25,16 +25,13 @@ from .drawing import DrawingUtilities, SmartGeometryEngine, GeometricRotation
 from .labels import LabelManager
 from .drawers import ShapeDrawer, ShapeRegistry
 from .controllers import (
-    TransformController, InputController, PlotController,
+    TransformController, PlotController,
     HistoryManager, ScaleManager,
 )
-from .widgets import CompositeTransferList
-from .composite_controller import CompositeDragController
-from .standalone_controller import StandaloneAnnotationController
-from .app import GeometryApp
+from .core import GeometryCore
 
 __all__ = [
-    "GeometryApp",
+    "GeometryCore",
     "ShapeDrawer",
     "ShapeRegistry",
     "AppConstants",
@@ -47,4 +44,14 @@ __all__ = [
     "DimLine",
     "StandaloneDimLine",
     "CompositeDimLine",
+    "TransformController",
+    "PlotController",
+    "HistoryManager",
+    "ScaleManager",
+    "LabelManager",
+    "DrawingUtilities",
+    "SmartGeometryEngine",
+    "GeometricRotation",
+    "TransformState",
+    "DrawingContext",
 ]
