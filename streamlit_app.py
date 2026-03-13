@@ -413,146 +413,77 @@ def _label_canvas_x_frac(annotation: dict, fig, ax) -> float:
 
 
 def _render_nudge_panel(fig, ax, capture_fn) -> None:
-    """Render compact arrow-nudge controls, positioned above the selected label."""
+    """Render a compact single-row label-nudge toolbar below the canvas."""
     ann = st.session_state.get("selected_annotation")
     if not ann:
         return
 
-    # Scale step to 1%/2.5%/6% of the visible data range so nudges feel
-    # proportional regardless of shape size.
+    # Step size proportional to visible data range
     xlim = ax.get_xlim()
     ylim = ax.get_ylim()
     view_range = max(abs(xlim[1] - xlim[0]), abs(ylim[1] - ylim[0]))
     step_key = st.session_state.get("nudge_step_key", "Medium")
-    step_values = {
-        "Small":  view_range * 0.01,
-        "Medium": view_range * 0.025,
-        "Large":  view_range * 0.06,
-    }
+    step_values = {"Small": view_range * 0.01, "Medium": view_range * 0.025, "Large": view_range * 0.06}
     step = step_values[step_key]
 
-    def _nudge_builtin(dx: float, dy: float) -> None:
-        key = ann["key"]
-        lm = core.label_manager
-        if key in lm.custom_positions:
-            cx, cy = lm.custom_positions[key]
-        elif key in lm.auto_positions:
-            cx, cy = lm.auto_positions[key][0], lm.auto_positions[key][1]
+    def _nudge(dx: float, dy: float) -> None:
+        if ann["type"] == "builtin":
+            key = ann["key"]
+            lm = core.label_manager
+            cx, cy = (lm.custom_positions[key] if key in lm.custom_positions
+                      else (lm.auto_positions[key][0], lm.auto_positions[key][1])
+                      if key in lm.auto_positions else (None, None))
+            if cx is None:
+                return
+            capture_fn()
+            lm.custom_positions[key] = (cx + dx, cy + dy)
         else:
-            return
-        capture_fn()
-        lm.custom_positions[key] = (cx + dx, cy + dy)
+            dim = core.standalone_dim_lines[ann["idx"]]
+            lx = dim.get("label_x") or (dim["x1"] + dim["x2"]) / 2
+            ly = dim.get("label_y") or (dim["y1"] + dim["y2"]) / 2
+            capture_fn()
+            dim["label_x"] = lx + dx
+            dim["label_y"] = ly + dy
 
-    def _nudge_dl_label(dx: float, dy: float) -> None:
-        dim = core.standalone_dim_lines[ann["idx"]]
-        lx = dim.get("label_x")
-        ly = dim.get("label_y")
-        if lx is None:
-            lx = (dim["x1"] + dim["x2"]) / 2
-        if ly is None:
-            ly = (dim["y1"] + dim["y2"]) / 2
-        capture_fn()
-        dim["label_x"] = lx + dx
-        dim["label_y"] = ly + dy
-
-    def _nudge_dl_line(dx: float, dy: float) -> None:
-        dim = core.standalone_dim_lines[ann["idx"]]
-        capture_fn()
-        dim["x1"] += dx
-        dim["y1"] += dy
-        dim["x2"] += dx
-        dim["y2"] += dy
-        if dim.get("label_x") is not None:
-            dim["label_x"] += dx
-        if dim.get("label_y") is not None:
-            dim["label_y"] += dy
-        dim["user_dragged"] = True
-
-    _nudge_label = _nudge_builtin if ann["type"] == "builtin" else _nudge_dl_label
-
-    # Horizontally position panel under the label's x position
-    x_frac = _label_canvas_x_frac(ann, fig, ax)
-    panel_w = 0.40
-    left_w = max(0.01, x_frac - panel_w / 2)
-    right_w = max(0.01, 1.0 - x_frac - panel_w / 2)
-    total = left_w + panel_w + right_w
-    _, pcol, _ = st.columns([left_w / total, panel_w / total, right_w / total])
-
-    with pcol:
-        with st.container(border=True):
-            # ── Header: name | step radio | close ──
-            hc1, hc2, hc3 = st.columns([2, 4, 1])
-            with hc1:
-                st.caption(f"**{ann['name']}**")
-            with hc2:
-                new_step_key = st.radio(
-                    "Step", ["Small", "Medium", "Large"],
-                    index=["Small", "Medium", "Large"].index(step_key),
-                    horizontal=True,
-                    label_visibility="collapsed",
-                    key="nudge_step_radio",
-                )
-                if new_step_key != step_key:
-                    st.session_state.nudge_step_key = new_step_key
-                    st.rerun()
-            with hc3:
-                if st.button("✕", key="btn_nudge_close"):
-                    core.label_manager.builtin_selected = None
-                    st.session_state.selected_annotation = None
-                    st.rerun()
-
-            # ── Label arrows: horizontal row  ↑ ← ○ → ↓ ──
-            la, lb, lc, ld, le, lf = st.columns([2, 1, 1, 1, 1, 1])
-            with la:
-                st.caption("Label")
-            with lb:
-                if st.button("↑", key="nl_u", use_container_width=True):
-                    _nudge_label(0, step); st.rerun()
-            with lc:
-                if st.button("←", key="nl_l", use_container_width=True):
-                    _nudge_label(-step, 0); st.rerun()
-            with ld:
-                if st.button("○", key="nl_reset", use_container_width=True, help="Reset label"):
-                    capture_fn()
-                    if ann["type"] == "builtin":
-                        core.label_manager.custom_positions.pop(ann["key"], None)
-                    else:
-                        dim = core.standalone_dim_lines[ann["idx"]]
-                        dim["label_x"] = None
-                        dim["label_y"] = None
-                    st.rerun()
-            with le:
-                if st.button("→", key="nl_r", use_container_width=True):
-                    _nudge_label(step, 0); st.rerun()
-            with lf:
-                if st.button("↓", key="nl_d", use_container_width=True):
-                    _nudge_label(0, -step); st.rerun()
-
-            # ── Line arrows (preset dim lines only) ──
-            if ann["type"] == "preset_dl":
-                ma, mb, mc, md, me, mf = st.columns([2, 1, 1, 1, 1, 1])
-                with ma:
-                    st.caption("Line")
-                with mb:
-                    if st.button("↑", key="line_u", use_container_width=True):
-                        _nudge_dl_line(0, step); st.rerun()
-                with mc:
-                    if st.button("←", key="line_l", use_container_width=True):
-                        _nudge_dl_line(-step, 0); st.rerun()
-                with md:
-                    if st.button("○", key="line_reset", use_container_width=True, help="Reset line"):
-                        capture_fn()
-                        dim = core.standalone_dim_lines[ann["idx"]]
-                        dim["user_dragged"] = False
-                        dim["label_x"] = None
-                        dim["label_y"] = None
-                        st.rerun()
-                with me:
-                    if st.button("→", key="line_r", use_container_width=True):
-                        _nudge_dl_line(step, 0); st.rerun()
-                with mf:
-                    if st.button("↓", key="line_d", use_container_width=True):
-                        _nudge_dl_line(0, -step); st.rerun()
+    with st.container(border=True):
+        c_name, c_u, c_l, c_rst, c_r, c_d, c_step, c_close = st.columns([2, 1, 1, 1, 1, 1, 4, 1])
+        with c_name:
+            st.caption(f"**{ann['name']}**")
+        with c_u:
+            if st.button("↑", key="nl_u", use_container_width=True, help="Move label up"):
+                _nudge(0, step); st.rerun()
+        with c_l:
+            if st.button("←", key="nl_l", use_container_width=True, help="Move label left"):
+                _nudge(-step, 0); st.rerun()
+        with c_rst:
+            if st.button("○", key="nl_reset", use_container_width=True, help="Reset label position"):
+                capture_fn()
+                if ann["type"] == "builtin":
+                    core.label_manager.custom_positions.pop(ann["key"], None)
+                else:
+                    dim = core.standalone_dim_lines[ann["idx"]]
+                    dim["label_x"] = None
+                    dim["label_y"] = None
+                st.rerun()
+        with c_r:
+            if st.button("→", key="nl_r", use_container_width=True, help="Move label right"):
+                _nudge(step, 0); st.rerun()
+        with c_d:
+            if st.button("↓", key="nl_d", use_container_width=True, help="Move label down"):
+                _nudge(0, -step); st.rerun()
+        with c_step:
+            new_step_key = st.radio(
+                "Step", ["Small", "Medium", "Large"],
+                index=["Small", "Medium", "Large"].index(step_key),
+                horizontal=True, label_visibility="collapsed", key="nudge_step_radio",
+            )
+            if new_step_key != step_key:
+                st.session_state.nudge_step_key = new_step_key; st.rerun()
+        with c_close:
+            if st.button("✕", key="btn_nudge_close", use_container_width=True, help="Deselect"):
+                core.label_manager.builtin_selected = None
+                st.session_state.selected_annotation = None
+                st.rerun()
 
 
 
@@ -1034,10 +965,6 @@ with st.sidebar:
 fig = core.generate_figure()
 ax = fig.axes[0] if fig.axes else None
 
-# Nudge panel appears above the canvas, positioned under the selected label
-if ax:
-    _render_nudge_panel(fig, ax, capture_state)
-
 # Render to PIL Image for click-capture component (BytesIO not accepted)
 buf = io.BytesIO()
 fig.savefig(buf, format="png", dpi=CANVAS_DPI)
@@ -1058,4 +985,8 @@ if coords and ax:
         st.session_state.selected_annotation = ann
         if ann != prev_ann:
             st.rerun()
+
+# Nudge toolbar appears below the canvas — canvas stays stable when it shows/hides
+if ax:
+    _render_nudge_panel(fig, ax, capture_state)
 
