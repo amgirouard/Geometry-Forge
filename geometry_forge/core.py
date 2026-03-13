@@ -426,7 +426,6 @@ class GeometryCore:
             aspect_ratio=self.scale_manager.get("aspect")
         )
         ctx.show_hashmarks = self.show_hashmarks
-        self.label_manager.builtin_selected = None  # no canvas selection in Streamlit
         transform = self._create_transform_state()
         params = self._collect_shape_params()
         self._apply_transform_pipeline(ctx, shape, transform, params)
