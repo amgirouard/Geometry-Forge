@@ -48,6 +48,22 @@ section[data-testid="stSidebar"] .stButton {
 section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] > div {
     gap: 0.25rem;
 }
+/* ── Nudge toolbar: compact square buttons ── */
+section[data-testid="stMain"] .stButton > button {
+    padding: 0 2px !important;
+    min-height: 26px !important;
+    height: 26px !important;
+    font-size: 13px !important;
+    line-height: 1 !important;
+}
+section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
+    padding: 4px 8px !important;
+}
+section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"]
+    div[data-testid="stHorizontalBlock"] {
+    gap: 4px !important;
+    align-items: center !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -467,24 +483,6 @@ def _render_nudge_panel(fig, ax, capture_fn) -> None:
             dim["label_y"] += dy
         dim["user_dragged"] = True
 
-    def _arrow_row(prefix: str, nudge_fn, reset_fn) -> None:
-        c_u, c_l, c_rst, c_r, c_d = st.columns(5)
-        with c_u:
-            if st.button("↑", key=f"{prefix}_u", use_container_width=True):
-                nudge_fn(0, step); st.rerun()
-        with c_l:
-            if st.button("←", key=f"{prefix}_l", use_container_width=True):
-                nudge_fn(-step, 0); st.rerun()
-        with c_rst:
-            if st.button("○", key=f"{prefix}_rst", use_container_width=True, help="Reset position"):
-                reset_fn(); st.rerun()
-        with c_r:
-            if st.button("→", key=f"{prefix}_r", use_container_width=True):
-                nudge_fn(step, 0); st.rerun()
-        with c_d:
-            if st.button("↓", key=f"{prefix}_d", use_container_width=True):
-                nudge_fn(0, -step); st.rerun()
-
     def _reset_label() -> None:
         capture_fn()
         if ann["type"] == "builtin":
@@ -502,30 +500,58 @@ def _render_nudge_panel(fig, ax, capture_fn) -> None:
         dim["label_y"] = None
 
     with st.container(border=True):
-        # Header row: name on left, close on right
-        h_name, h_close = st.columns([10, 1])
-        with h_name:
-            st.caption(f"**{display_name}**")
-        with h_close:
+        is_dl = ann["type"] == "preset_dl"
+        # Single row: name | label-arrows | [line-arrows] | close
+        if is_dl:
+            cols = st.columns([3, 1, 1, 1, 1, 1, 0.4, 1, 1, 1, 1, 1, 1])
+            cn, lu, ll, lo, lr, ld, _sep, lnu, lnl, lno, lnr, lnd, cx = cols
+        else:
+            cols = st.columns([3, 1, 1, 1, 1, 1, 1])
+            cn, lu, ll, lo, lr, ld, cx = cols
+
+        with cn:
+            st.markdown(f"<span style='font-size:12px;font-weight:600'>{display_name}</span>",
+                        unsafe_allow_html=True)
+        with lu:
+            if st.button("↑", key="nl_u", use_container_width=True, help="Label ↑"):
+                _nudge_label(0, step); st.rerun()
+        with ll:
+            if st.button("←", key="nl_l", use_container_width=True, help="Label ←"):
+                _nudge_label(-step, 0); st.rerun()
+        with lo:
+            if st.button("○", key="nl_rst", use_container_width=True, help="Reset label"):
+                _reset_label(); st.rerun()
+        with lr:
+            if st.button("→", key="nl_r", use_container_width=True, help="Label →"):
+                _nudge_label(step, 0); st.rerun()
+        with ld:
+            if st.button("↓", key="nl_d", use_container_width=True, help="Label ↓"):
+                _nudge_label(0, -step); st.rerun()
+
+        if is_dl:
+            with _sep:
+                st.markdown("<span style='color:#ccc'>│</span>", unsafe_allow_html=True)
+            with lnu:
+                if st.button("↑", key="ln_u", use_container_width=True, help="Line ↑"):
+                    _nudge_line(0, step); st.rerun()
+            with lnl:
+                if st.button("←", key="ln_l", use_container_width=True, help="Line ←"):
+                    _nudge_line(-step, 0); st.rerun()
+            with lno:
+                if st.button("○", key="ln_rst", use_container_width=True, help="Reset line"):
+                    _reset_line(); st.rerun()
+            with lnr:
+                if st.button("→", key="ln_r", use_container_width=True, help="Line →"):
+                    _nudge_line(step, 0); st.rerun()
+            with lnd:
+                if st.button("↓", key="ln_d", use_container_width=True, help="Line ↓"):
+                    _nudge_line(0, -step); st.rerun()
+
+        with cx:
             if st.button("✕", key="btn_nudge_close", use_container_width=True, help="Deselect"):
                 core.label_manager.builtin_selected = None
                 st.session_state.selected_annotation = None
                 st.rerun()
-
-        # Row 1 — label nudge
-        lbl_col, arrows_col = st.columns([1, 5])
-        with lbl_col:
-            st.caption("Label")
-        with arrows_col:
-            _arrow_row("nl", _nudge_label, _reset_label)
-
-        # Row 2 — line nudge (preset dim lines only)
-        if ann["type"] == "preset_dl":
-            ln_col, larrows_col = st.columns([1, 5])
-            with ln_col:
-                st.caption("Line")
-            with larrows_col:
-                _arrow_row("ln", _nudge_line, _reset_line)
 
 
 
