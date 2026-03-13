@@ -511,11 +511,16 @@ with st.sidebar:
             params_changed = False
             for lbl, default_val in zip(active_labels, default_vals):
                 current_val = core.params.get(lbl, default_val)
-                new_val = st.text_input(
-                    lbl,
-                    value=current_val,
-                    key=f"param_{shape}_{core.triangle_type}_{core.dimension_mode}_{lbl}",
-                )
+                pl, pi = st.columns([2, 1])
+                with pl:
+                    st.write(lbl)
+                with pi:
+                    new_val = st.text_input(
+                        lbl,
+                        value=current_val,
+                        key=f"param_{shape}_{core.triangle_type}_{core.dimension_mode}_{lbl}",
+                        label_visibility="collapsed",
+                    )
                 if new_val != current_val:
                     params_changed = True
                     core.params[lbl] = new_val
@@ -572,18 +577,19 @@ with st.sidebar:
             if abs(new_peak - core.scale_manager.get("peak_offset")) > 0.001:
                 core.scale_manager.set("peak_offset", new_peak)
 
-        # View scale is always available for standalone shapes
-        spec_vs = core.scale_manager.specs["view_scale"]
-        new_view = st.slider(
-            "View Scale",
-            min_value=float(spec_vs.min_val),
-            max_value=float(spec_vs.max_val),
-            value=float(core.scale_manager.get("view_scale")),
-            step=0.01,
-            key="sl_view_scale",
-        )
-        if abs(new_view - core.scale_manager.get("view_scale")) > 0.001:
-            core.scale_manager.set("view_scale", new_view)
+        # View scale only for non-2D/3D categories
+        if core.category not in ("2D Figures", "3D Solids"):
+            spec_vs = core.scale_manager.specs["view_scale"]
+            new_view = st.slider(
+                "View Scale",
+                min_value=float(spec_vs.min_val),
+                max_value=float(spec_vs.max_val),
+                value=float(core.scale_manager.get("view_scale")),
+                step=0.01,
+                key="sl_view_scale",
+            )
+            if abs(new_view - core.scale_manager.get("view_scale")) > 0.001:
+                core.scale_manager.set("view_scale", new_view)
 
     # ── 7. Toggle (Preset) Dimension Labels ────────────────────────────────────
     if shape and not is_composite and config:
@@ -594,7 +600,7 @@ with st.sidebar:
                 cur_text = core.label_manager.label_texts.get(lbl_key, "")
                 cur_vis = core.label_manager.label_visibility.get(lbl_key, False)
 
-                tc, ti = st.columns([1, 2])
+                tc, ti = st.columns([2, 1])
                 with tc:
                     new_vis = st.checkbox(lbl_key, value=cur_vis,
                                           key=f"toggle_vis_{st_key}")
