@@ -5,6 +5,7 @@ Run with:  streamlit run streamlit_app.py
 from __future__ import annotations
 
 import io
+import math
 import streamlit as st
 from PIL import Image as _PILImage
 from streamlit_image_coordinates import streamlit_image_coordinates
@@ -313,144 +314,9 @@ def _render_composite_controls(core: GeometryCore, shape: str, capture_fn) -> No
                 capture_fn()
                 core.composite_transforms[i] = {**tr, "h": new_fh, "v": new_fv}
 
-    # Composite freeform labels
-    st.markdown("**Labels**")
-    for idx, lbl in enumerate(list(core.composite_labels)):
-        ca, cb = st.columns([3, 1])
-        with ca:
-            st.caption(
-                f'"{lbl.get("text", "")}" '
-                f'@ ({lbl.get("x", 0):.1f}, {lbl.get("y", 0):.1f})'
-            )
-        with cb:
-            if st.button("✕", key=f"del_comp_lbl_{idx}"):
-                capture_fn()
-                core.composite_labels.pop(idx)
-                st.rerun()
-
-    with st.expander("Add Label", expanded=False):
-        cl_text = st.text_input("Text", key="new_comp_lbl_text")
-        cl_x = st.number_input("X", value=0.0, step=0.5, key="new_comp_lbl_x")
-        cl_y = st.number_input("Y", value=0.0, step=0.5, key="new_comp_lbl_y")
-        if st.button("Add Label", key="btn_add_comp_lbl") and cl_text:
-            capture_fn()
-            core.composite_labels.append({"text": cl_text, "x": cl_x, "y": cl_y})
-            st.rerun()
-
-    # Composite dim lines
-    st.markdown("**Dimension Lines**")
-    for idx, dl in enumerate(list(core.composite_dim_lines_list)):
-        da, db = st.columns([3, 1])
-        with da:
-            st.caption(
-                f'"{dl.get("text", "")}" '
-                f'({dl.get("x1", 0):.1f},{dl.get("y1", 0):.1f})'
-                f'→({dl.get("x2", 0):.1f},{dl.get("y2", 0):.1f})'
-            )
-        with db:
-            if st.button("✕", key=f"del_comp_dl_{idx}"):
-                capture_fn()
-                core.composite_dim_lines_list.pop(idx)
-                st.rerun()
-
-    with st.expander("Add Dimension Line", expanded=False):
-        cdl_text = st.text_input("Text", key="new_comp_dl_text")
-        cdl_c1, cdl_c2 = st.columns(2)
-        with cdl_c1:
-            cdl_x1 = st.number_input("X1", value=0.0, step=0.5, key="new_comp_dl_x1")
-            cdl_y1 = st.number_input("Y1", value=0.0, step=0.5, key="new_comp_dl_y1")
-        with cdl_c2:
-            cdl_x2 = st.number_input("X2", value=5.0, step=0.5, key="new_comp_dl_x2")
-            cdl_y2 = st.number_input("Y2", value=0.0, step=0.5, key="new_comp_dl_y2")
-        if st.button("Add Dim Line", key="btn_add_comp_dl"):
-            capture_fn()
-            core.composite_dim_lines_list.append({
-                "text": cdl_text,
-                "x1": cdl_x1, "y1": cdl_y1,
-                "x2": cdl_x2, "y2": cdl_y2,
-                "label_x": None, "label_y": None,
-                "constraint": "free",
-            })
-            st.rerun()
 
 
-def _render_annotation_controls(core: GeometryCore, capture_fn) -> None:
-    """Render freeform label and dimension line controls for standalone mode."""
-    has_annotations = bool(core.standalone_labels or core.standalone_dim_lines)
-    if has_annotations:
-        st.subheader("Annotations")
-    else:
-        # Collapsed expander when nothing is added yet
-        with st.expander("Annotations", expanded=False):
-            _annotation_form(core, capture_fn)
-        return
-    _annotation_form(core, capture_fn)
-
-
-def _annotation_form(core: GeometryCore, capture_fn) -> None:
-    """Shared annotation add/remove widgets."""
-    # Existing freeform labels
-    for idx, lbl in enumerate(list(core.standalone_labels)):
-        la, lb = st.columns([3, 1])
-        with la:
-            st.caption(
-                f'"{lbl.get("text", "")}" '
-                f'@ ({lbl.get("x", 0):.1f}, {lbl.get("y", 0):.1f})'
-            )
-        with lb:
-            if st.button("✕", key=f"del_sa_lbl_{idx}"):
-                capture_fn()
-                core.standalone_labels.pop(idx)
-                st.rerun()
-
-    with st.expander("Add Label", expanded=False):
-        sa_text = st.text_input("Text", key="new_sa_lbl_text")
-        sa_x = st.number_input("X", value=0.0, step=0.5, key="new_sa_lbl_x")
-        sa_y = st.number_input("Y", value=0.0, step=0.5, key="new_sa_lbl_y")
-        if st.button("Add Label", key="btn_add_sa_lbl") and sa_text:
-            capture_fn()
-            core.standalone_labels.append({"text": sa_text, "x": sa_x, "y": sa_y})
-            st.rerun()
-
-    # Existing dim lines
-    for idx, dl in enumerate(list(core.standalone_dim_lines)):
-        da, db = st.columns([3, 1])
-        with da:
-            st.caption(
-                f'"{dl.get("text", "")}" '
-                f'({dl.get("x1", 0):.1f},{dl.get("y1", 0):.1f})'
-                f'→({dl.get("x2", 0):.1f},{dl.get("y2", 0):.1f})'
-            )
-        with db:
-            if st.button("✕", key=f"del_sa_dl_{idx}"):
-                capture_fn()
-                core.standalone_dim_lines.pop(idx)
-                st.rerun()
-
-    with st.expander("Add Dimension Line", expanded=False):
-        sa_dl_text = st.text_input("Text", key="new_sa_dl_text")
-        dl_c1, dl_c2 = st.columns(2)
-        with dl_c1:
-            sa_dl_x1 = st.number_input("X1", value=0.0, step=0.5, key="new_sa_dl_x1")
-            sa_dl_y1 = st.number_input("Y1", value=0.0, step=0.5, key="new_sa_dl_y1")
-        with dl_c2:
-            sa_dl_x2 = st.number_input("X2", value=5.0, step=0.5, key="new_sa_dl_x2")
-            sa_dl_y2 = st.number_input("Y2", value=0.0, step=0.5, key="new_sa_dl_y2")
-        if st.button("Add Dim Line", key="btn_add_sa_dl"):
-            capture_fn()
-            core.standalone_dim_lines.append({
-                "text": sa_dl_text,
-                "x1": sa_dl_x1, "y1": sa_dl_y1,
-                "x2": sa_dl_x2, "y2": sa_dl_y2,
-                "label_x": None, "label_y": None,
-                "preset_key": None,
-                "user_dragged": False,
-                "constraint": None,
-            })
-            st.rerun()
-
-
-# ── Click-to-place helpers ────────────────────────────────────────────────────
+# ── Canvas interaction helpers ────────────────────────────────────────────────
 
 def _pixel_to_data(
     px: int, py: int, fig, ax
@@ -474,96 +340,213 @@ def _pixel_to_data(
     return round(data_x, 2), round(data_y, 2)
 
 
-def _render_placement_form(core: GeometryCore, capture_fn) -> None:
-    """Render the click-to-place annotation form when a pending click exists."""
-    pending = st.session_state.get("pending_click")
-    if not pending:
+def _find_nearest_label(data_x: float, data_y: float, ax) -> dict | None:
+    """Return a selection dict for the label nearest the click, or None."""
+    # Check preset dim line label bboxes (padded hit area)
+    pad = 0.15
+    for i, (bx0, by0, bx1, by1) in enumerate(core._standalone_dim_label_bboxes):
+        x_lo = min(bx0, bx1) - pad
+        x_hi = max(bx0, bx1) + pad
+        y_lo = min(by0, by1) - pad
+        y_hi = max(by0, by1) + pad
+        if x_lo <= data_x <= x_hi and y_lo <= data_y <= y_hi:
+            if i < len(core.standalone_dim_lines):
+                dim = core.standalone_dim_lines[i]
+                return {"type": "preset_dl", "idx": i, "name": dim["text"]}
+
+    # Check built-in labels from auto_positions (distance threshold)
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+    view_range = max(xlim[1] - xlim[0], ylim[1] - ylim[0])
+    threshold = max(0.5, view_range * 0.08)
+
+    best_key, best_dist = None, float("inf")
+    for key, pos in core.label_manager.auto_positions.items():
+        lx, ly = pos[0], pos[1]
+        if key in core.label_manager.custom_positions:
+            lx, ly = core.label_manager.custom_positions[key]
+        dist = math.sqrt((data_x - lx) ** 2 + (data_y - ly) ** 2)
+        if dist < best_dist:
+            best_dist = dist
+            best_key = key
+
+    if best_key and best_dist < threshold:
+        return {"type": "builtin", "key": best_key, "name": best_key}
+
+    return None
+
+
+def _label_canvas_x_frac(annotation: dict, fig, ax) -> float:
+    """Return the 0-1 horizontal fraction of the canvas where the label sits."""
+    if annotation["type"] == "builtin":
+        key = annotation["key"]
+        if key in core.label_manager.custom_positions:
+            data_x = core.label_manager.custom_positions[key][0]
+        elif key in core.label_manager.auto_positions:
+            data_x = core.label_manager.auto_positions[key][0]
+        else:
+            return 0.5
+    else:  # preset_dl
+        idx = annotation["idx"]
+        if idx >= len(core.standalone_dim_lines):
+            return 0.5
+        dim = core.standalone_dim_lines[idx]
+        lx = dim.get("label_x")
+        data_x = lx if lx is not None else (dim["x1"] + dim["x2"]) / 2
+
+    xlim = ax.get_xlim()
+    ax_pos = ax.get_position()
+    if xlim[1] == xlim[0]:
+        return 0.5
+    ax_rel = (data_x - xlim[0]) / (xlim[1] - xlim[0])
+    return max(0.05, min(0.95, ax_pos.x0 + ax_rel * ax_pos.width))
+
+
+def _render_nudge_panel(fig, ax, capture_fn) -> None:
+    """Render arrow-nudge controls below the canvas, positioned under the selected label."""
+    ann = st.session_state.get("selected_annotation")
+    if not ann:
         return
 
-    mode = st.session_state.get("pending_click_mode", "label")
-    x, y = pending["x"], pending["y"]
+    step = st.session_state.get("nudge_step", 0.3)
 
-    with st.container(border=True):
-        st.caption(f"📍 Placing at ({x}, {y})")
-        mode_col, _ = st.columns([2, 1])
-        with mode_col:
-            new_mode = st.radio(
-                "Type",
-                ["label", "dim line"],
-                index=0 if mode == "label" else 1,
-                key="place_mode_radio",
+    def _nudge_builtin(dx: float, dy: float) -> None:
+        key = ann["key"]
+        lm = core.label_manager
+        if key in lm.custom_positions:
+            cx, cy = lm.custom_positions[key]
+        elif key in lm.auto_positions:
+            cx, cy = lm.auto_positions[key][0], lm.auto_positions[key][1]
+        else:
+            return
+        capture_fn()
+        lm.custom_positions[key] = (cx + dx, cy + dy)
+
+    def _nudge_dl_label(dx: float, dy: float) -> None:
+        dim = core.standalone_dim_lines[ann["idx"]]
+        lx = dim.get("label_x")
+        ly = dim.get("label_y")
+        if lx is None:
+            lx = (dim["x1"] + dim["x2"]) / 2
+        if ly is None:
+            ly = (dim["y1"] + dim["y2"]) / 2
+        capture_fn()
+        dim["label_x"] = lx + dx
+        dim["label_y"] = ly + dy
+
+    def _nudge_dl_line(dx: float, dy: float) -> None:
+        dim = core.standalone_dim_lines[ann["idx"]]
+        capture_fn()
+        dim["x1"] += dx
+        dim["y1"] += dy
+        dim["x2"] += dx
+        dim["y2"] += dy
+        if dim.get("label_x") is not None:
+            dim["label_x"] += dx
+        if dim.get("label_y") is not None:
+            dim["label_y"] += dy
+        dim["user_dragged"] = True
+
+    # Column layout: position panel under the label's x position
+    x_frac = _label_canvas_x_frac(ann, fig, ax)
+    panel_w = 0.18
+    left_w = max(0.01, x_frac - panel_w / 2)
+    right_w = max(0.01, 1.0 - x_frac - panel_w / 2)
+    total = left_w + panel_w + right_w
+    _, pcol, _ = st.columns([left_w / total, panel_w / total, right_w / total])
+
+    with pcol:
+        with st.container(border=True):
+            hc1, hc2 = st.columns([4, 1])
+            with hc1:
+                st.caption(f"**{ann['name']}**")
+            with hc2:
+                if st.button("✕", key="btn_nudge_close"):
+                    core.label_manager.builtin_selected = None
+                    st.session_state.selected_annotation = None
+                    st.rerun()
+
+            # Step size
+            step_options = ["Small", "Medium", "Large"]
+            step_values = {"Small": 0.1, "Medium": 0.3, "Large": 0.7}
+            cur_label = "Small" if step <= 0.15 else "Medium" if step <= 0.5 else "Large"
+            new_step_label = st.radio(
+                "Step",
+                step_options,
+                index=step_options.index(cur_label),
                 horizontal=True,
                 label_visibility="collapsed",
+                key="nudge_step_radio",
             )
-        if new_mode != mode:
-            st.session_state.pending_click_mode = new_mode
-            st.rerun()
+            if step_values[new_step_label] != step:
+                st.session_state.nudge_step = step_values[new_step_label]
+                st.rerun()
 
-        if mode == "label":
-            txt = st.text_input("Label text", key="place_label_text", placeholder="e.g. x")
-            c1, c2 = st.columns(2)
-            with c1:
-                if st.button("Place Label", key="btn_place_label", width="stretch"):
+            # ── Label nudge arrows ──
+            st.caption("Label")
+            _nudge_label = _nudge_builtin if ann["type"] == "builtin" else _nudge_dl_label
+
+            _, uc, _ = st.columns(3)
+            with uc:
+                if st.button("↑", key="nl_u", use_container_width=True):
+                    _nudge_label(0, step)
+                    st.rerun()
+            lc, cc, rc = st.columns(3)
+            with lc:
+                if st.button("←", key="nl_l", use_container_width=True):
+                    _nudge_label(-step, 0)
+                    st.rerun()
+            with cc:
+                if st.button("○", key="nl_reset", use_container_width=True, help="Reset label"):
                     capture_fn()
-                    core.standalone_labels.append({
-                        "text": txt or "?",
-                        "x": x,
-                        "y": y,
-                    })
-                    st.session_state.pending_click = None
-                    st.session_state.last_click_pos = None
+                    if ann["type"] == "builtin":
+                        core.label_manager.custom_positions.pop(ann["key"], None)
+                    else:
+                        dim = core.standalone_dim_lines[ann["idx"]]
+                        dim["label_x"] = None
+                        dim["label_y"] = None
                     st.rerun()
-            with c2:
-                if st.button("Cancel", key="btn_place_cancel", width="stretch"):
-                    st.session_state.pending_click = None
-                    st.session_state.last_click_pos = None
+            with rc:
+                if st.button("→", key="nl_r", use_container_width=True):
+                    _nudge_label(step, 0)
+                    st.rerun()
+            _, dc, _ = st.columns(3)
+            with dc:
+                if st.button("↓", key="nl_d", use_container_width=True):
+                    _nudge_label(0, -step)
                     st.rerun()
 
-        else:  # dim line
-            start = st.session_state.get("pending_click_start")
-            if start is None:
-                st.caption("Click on the canvas to set the **start** point.")
-                if st.button("Use current point as start", key="btn_set_start", width="stretch"):
-                    st.session_state.pending_click_start = {"x": x, "y": y}
-                    st.session_state.pending_click = None
-                    st.session_state.last_click_pos = None
-                    st.rerun()
-                if st.button("Cancel", key="btn_dl_cancel_nostart", width="stretch"):
-                    st.session_state.pending_click = None
-                    st.session_state.last_click_pos = None
-                    st.session_state.pending_click_mode = "label"
-                    st.rerun()
-            else:
-                st.caption(
-                    f"Start: ({start['x']}, {start['y']})  →  "
-                    f"End: ({x}, {y})"
-                )
-                dl_txt = st.text_input("Dim line label", key="place_dl_text", placeholder="e.g. l")
-                c1, c2 = st.columns(2)
-                with c1:
-                    if st.button("Place Dim Line", key="btn_place_dl", width="stretch"):
+            # ── Line nudge arrows (preset dim lines only) ──
+            if ann["type"] == "preset_dl":
+                st.caption("Line")
+                _, luc, _ = st.columns(3)
+                with luc:
+                    if st.button("↑", key="line_u", use_container_width=True):
+                        _nudge_dl_line(0, step)
+                        st.rerun()
+                llc, lcc, lrc = st.columns(3)
+                with llc:
+                    if st.button("←", key="line_l", use_container_width=True):
+                        _nudge_dl_line(-step, 0)
+                        st.rerun()
+                with lcc:
+                    if st.button("○", key="line_reset", use_container_width=True, help="Reset line"):
                         capture_fn()
-                        core.standalone_dim_lines.append({
-                            "text": dl_txt or "?",
-                            "x1": start["x"], "y1": start["y"],
-                            "x2": x, "y2": y,
-                            "label_x": None, "label_y": None,
-                            "preset_key": None,
-                            "user_dragged": False,
-                            "constraint": None,
-                        })
-                        st.session_state.pending_click = None
-                        st.session_state.pending_click_start = None
-                        st.session_state.last_click_pos = None
-                        st.session_state.pending_click_mode = "label"
+                        dim = core.standalone_dim_lines[ann["idx"]]
+                        dim["user_dragged"] = False
+                        dim["label_x"] = None
+                        dim["label_y"] = None
                         st.rerun()
-                with c2:
-                    if st.button("Cancel", key="btn_dl_cancel", width="stretch"):
-                        st.session_state.pending_click = None
-                        st.session_state.pending_click_start = None
-                        st.session_state.last_click_pos = None
-                        st.session_state.pending_click_mode = "label"
+                with lrc:
+                    if st.button("→", key="line_r", use_container_width=True):
+                        _nudge_dl_line(step, 0)
                         st.rerun()
+                _, ldc, _ = st.columns(3)
+                with ldc:
+                    if st.button("↓", key="line_d", use_container_width=True):
+                        _nudge_dl_line(0, -step)
+                        st.rerun()
+
 
 
 # ── Session state bootstrap ───────────────────────────────────────────────────
@@ -573,12 +556,10 @@ if "history" not in st.session_state:
     st.session_state.history: list[dict] = []
 if "redo_stack" not in st.session_state:
     st.session_state.redo_stack: list[dict] = []
-if "pending_click" not in st.session_state:
-    st.session_state.pending_click = None
-if "pending_click_start" not in st.session_state:
-    st.session_state.pending_click_start = None
-if "pending_click_mode" not in st.session_state:
-    st.session_state.pending_click_mode = "label"
+if "selected_annotation" not in st.session_state:
+    st.session_state.selected_annotation = None
+if "nudge_step" not in st.session_state:
+    st.session_state.nudge_step = 0.3
 if "last_click_pos" not in st.session_state:
     st.session_state.last_click_pos = None
 
@@ -642,6 +623,8 @@ with st.sidebar:
         core.scale_manager.reset_many(["aspect", "slope", "peak_offset", "view_scale"])
         core.dimension_mode = "Default"
         core.triangle_type = "Custom"
+        st.session_state.selected_annotation = None
+        core.label_manager.builtin_selected = None
 
     current_shape_idx = (
         shapes_in_cat.index(core.shape_name)
@@ -665,6 +648,8 @@ with st.sidebar:
         core.triangle_type = "Custom"
         core.standalone_labels = []
         core.standalone_dim_lines = []
+        st.session_state.selected_annotation = None
+        core.label_manager.builtin_selected = None
 
     shape = core.shape_name
     config = ShapeConfigProvider.get(shape) if shape else None
@@ -694,6 +679,8 @@ with st.sidebar:
             core.triangle_type = new_tri
             core.params = {}
             core.scale_manager.reset_many(["aspect", "slope", "peak_offset"])
+            st.session_state.selected_annotation = None
+            core.label_manager.builtin_selected = None
         # Use triangle sub-type config for all following sections
         config = ShapeConfigProvider.get_triangle_config(core.triangle_type)
 
@@ -950,11 +937,7 @@ with st.sidebar:
     if is_composite:
         _render_composite_controls(core, shape, capture_state)
 
-    # ── 11. Freeform Annotations (standalone mode only) ────────────────────────
-    if shape and not is_composite:
-        _render_annotation_controls(core, capture_state)
-
-    # ── 12. Appearance ─────────────────────────────────────────────────────────
+    # ── 11. Appearance ─────────────────────────────────────────────────────────
     st.divider()
     st.subheader("Appearance")
 
@@ -1044,10 +1027,6 @@ with st.sidebar:
 fig = core.generate_figure()
 ax = fig.axes[0] if fig.axes else None
 
-# Placement form appears above the canvas when a click is pending
-if ax and not core._is_composite_shape(core.shape_name):
-    _render_placement_form(core, capture_state)
-
 # Render to PIL Image for click-capture component (BytesIO not accepted)
 buf = io.BytesIO()
 fig.savefig(buf, format="png", dpi=CANVAS_DPI)
@@ -1059,5 +1038,13 @@ if coords and ax:
     pos = _pixel_to_data(coords["x"], coords["y"], fig, ax)
     if pos is not None and pos != st.session_state.last_click_pos:
         st.session_state.last_click_pos = pos
-        st.session_state.pending_click = {"x": pos[0], "y": pos[1]}
-        st.rerun()
+        ann = _find_nearest_label(pos[0], pos[1], ax)
+        prev_ann = st.session_state.selected_annotation
+        core.label_manager.builtin_selected = ann["key"] if ann and ann["type"] == "builtin" else None
+        st.session_state.selected_annotation = ann
+        if ann != prev_ann:
+            st.rerun()
+
+# Nudge panel appears below the canvas at the label's horizontal position
+if ax:
+    _render_nudge_panel(fig, ax, capture_state)
