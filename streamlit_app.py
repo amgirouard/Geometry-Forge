@@ -48,6 +48,69 @@ section[data-testid="stSidebar"] .stButton {
 section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] > div {
     gap: 0.25rem;
 }
+/* Hide Streamlit header bar (Deploy button / menu) */
+header[data-testid="stHeader"] { display: none !important; }
+/* Reduce main content top padding and cap width so canvas + toolbar both fit on screen */
+section[data-testid="stMain"] .block-container {
+    padding-top: 0.25rem !important;
+    padding-bottom: 0.25rem !important;
+    max-width: 1050px !important;
+}
+/* Square nudge panel buttons */
+section[data-testid="stMain"] div[data-testid="stVerticalBlockBorderWrapper"] button {
+    aspect-ratio: 1 / 1 !important;
+    min-width: unset !important;
+    padding: 0 !important;
+    width: 1.9rem !important;
+    height: 1.9rem !important;
+    min-height: unset !important;
+}
+/* Nudge panel: tighten inner column spacing */
+section[data-testid="stMain"] div[data-testid="stVerticalBlockBorderWrapper"] {
+    padding: 0.3rem 0.5rem !important;
+}
+section[data-testid="stMain"] div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stHorizontalBlock"] {
+    gap: 0 !important;
+    flex-wrap: nowrap !important;
+}
+section[data-testid="stMain"] div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] {
+    min-width: 0 !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+}
+/* Inline header ⓘ tooltip */
+.gf-tip {
+    position: relative;
+    display: inline;
+    cursor: help;
+    color: #aaa;
+    font-size: 0.78em;
+    font-weight: normal;
+    vertical-align: middle;
+    margin-left: 0.3em;
+}
+.gf-tip .gf-tip-box {
+    display: none;
+    position: absolute;
+    left: 0;
+    top: 1.5em;
+    background: #3a3a3a;
+    color: #f0f0f0;
+    font-size: 0.73rem;
+    font-weight: normal;
+    line-height: 1.45;
+    text-align: left;
+    padding: 5px 9px;
+    border-radius: 5px;
+    width: 210px;
+    z-index: 9999;
+    pointer-events: none;
+    white-space: normal;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+}
+.gf-tip:hover .gf-tip-box {
+    display: block;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -168,7 +231,7 @@ def _render_preset_dim_lines(core: GeometryCore, shape: str, capture_fn) -> None
         cur_checked = idx >= 0
         cur_text = core.standalone_dim_lines[idx]["text"] if cur_checked else default_text
 
-        col_chk, col_txt = st.columns([2, 1])
+        col_chk, col_txt = st.columns([1.5, 1])
         with col_chk:
             new_checked = st.checkbox(
                 display_label,
@@ -319,25 +382,27 @@ def _render_composite_controls(core: GeometryCore, shape: str, capture_fn) -> No
 # ── Canvas interaction helpers ────────────────────────────────────────────────
 
 def _pixel_to_data(
-    px: int, py: int, fig, ax
+    px: int, py: int, fig, ax, img_w: int = 0, img_h: int = 0
 ) -> tuple[float, float] | None:
-    """Convert pixel coords (from streamlit_image_coordinates) to axes data coords."""
-    fig_w_px = fig.get_figwidth() * CANVAS_DPI
-    fig_h_px = fig.get_figheight() * CANVAS_DPI
-    norm_x = px / fig_w_px
-    norm_y = py / fig_h_px
-    ax_pos = ax.get_position()
-    if not (ax_pos.x0 <= norm_x <= ax_pos.x0 + ax_pos.width):
+    """Convert pixel coords (from streamlit_image_coordinates) to axes data coords.
+
+    img_w / img_h should be the actual PIL image dimensions so the mapping is
+    independent of any DPI rounding.  Falls back to fig dimensions if not provided.
+    The axes are assumed to fill the entire figure
+    (subplots_adjust left=0 right=1 top=1 bottom=0).
+    """
+    w = img_w if img_w > 0 else int(fig.get_figwidth() * CANVAS_DPI)
+    h = img_h if img_h > 0 else int(fig.get_figheight() * CANVAS_DPI)
+    if w <= 0 or h <= 0:
         return None
-    if not (ax_pos.y0 <= norm_y <= ax_pos.y0 + ax_pos.height):
-        return None
-    ax_rel_x = (norm_x - ax_pos.x0) / ax_pos.width
-    ax_rel_y = (norm_y - ax_pos.y0) / ax_pos.height
+    # Normalised position within the figure (axes fill entire figure)
+    norm_x = px / w
+    norm_y = py / h          # 0 = top of image
     xlim = ax.get_xlim()
     ylim = ax.get_ylim()
-    data_x = xlim[0] + ax_rel_x * (xlim[1] - xlim[0])
-    data_y = ylim[0] + (1.0 - ax_rel_y) * (ylim[1] - ylim[0])  # Y axis is inverted
-    return round(data_x, 2), round(data_y, 2)
+    data_x = xlim[0] + norm_x * (xlim[1] - xlim[0])
+    data_y = ylim[0] + (1.0 - norm_y) * (ylim[1] - ylim[0])  # image y is inverted
+    return data_x, data_y
 
 
 def _find_nearest_label(data_x: float, data_y: float, ax) -> dict | None:
@@ -403,7 +468,7 @@ def _label_canvas_x_frac(annotation: dict, fig, ax) -> float:
 
 
 def _render_nudge_panel(fig, ax, capture_fn) -> None:
-    """Render arrow-nudge controls below the canvas, positioned under the selected label."""
+    """Render arrow-nudge controls as a single horizontal bar below the canvas."""
     ann = st.session_state.get("selected_annotation")
     if not ann:
         return
@@ -441,111 +506,101 @@ def _render_nudge_panel(fig, ax, capture_fn) -> None:
         dim["y1"] += dy
         dim["x2"] += dx
         dim["y2"] += dy
-        if dim.get("label_x") is not None:
-            dim["label_x"] += dx
-        if dim.get("label_y") is not None:
-            dim["label_y"] += dy
         dim["user_dragged"] = True
+        # Label position is intentionally NOT updated here —
+        # left buttons move the label, right buttons move only the line.
 
-    # Column layout: position panel under the label's x position
-    x_frac = _label_canvas_x_frac(ann, fig, ax)
-    panel_w = 0.18
-    left_w = max(0.01, x_frac - panel_w / 2)
-    right_w = max(0.01, 1.0 - x_frac - panel_w / 2)
-    total = left_w + panel_w + right_w
-    _, pcol, _ = st.columns([left_w / total, panel_w / total, right_w / total])
+    _nudge_label = _nudge_builtin if ann["type"] == "builtin" else _nudge_dl_label
+    is_line = ann["type"] == "preset_dl"
 
-    with pcol:
-        with st.container(border=True):
-            hc1, hc2 = st.columns([4, 1])
-            with hc1:
-                st.caption(f"**{ann['name']}**")
-            with hc2:
-                if st.button("✕", key="btn_nudge_close"):
-                    core.label_manager.builtin_selected = None
-                    st.session_state.selected_annotation = None
-                    st.rerun()
-
-            # Step size
-            step_options = ["Small", "Medium", "Large"]
-            step_values = {"Small": 0.1, "Medium": 0.3, "Large": 0.7}
-            cur_label = "Small" if step <= 0.15 else "Medium" if step <= 0.5 else "Large"
-            new_step_label = st.radio(
-                "Step",
-                step_options,
-                index=step_options.index(cur_label),
-                horizontal=True,
-                label_visibility="collapsed",
-                key="nudge_step_radio",
+    # ── Single flat toolbar row ────────────────────────────────────────────────
+    with st.container(border=True):
+        if is_line:
+            name_c, lu, ll, lo, lr, ld, sep_c, llu, lll, llo, llr, lld, close_c = st.columns(
+                [2.0, 0.35, 0.35, 0.35, 0.35, 0.35, 0.1, 0.35, 0.35, 0.35, 0.35, 0.35, 0.35]
             )
-            if step_values[new_step_label] != step:
-                st.session_state.nudge_step = step_values[new_step_label]
+        else:
+            name_c, lu, ll, lo, lr, ld, close_c = st.columns(
+                [2.0, 0.35, 0.35, 0.35, 0.35, 0.35, 0.35]
+            )
+
+        with name_c:
+            # Always read the live label text so sidebar edits are reflected immediately
+            if ann["type"] == "preset_dl" and ann["idx"] < len(core.standalone_dim_lines):
+                display_name = core.standalone_dim_lines[ann["idx"]]["text"]
+            else:
+                display_name = ann.get("name", "")
+            st.markdown(
+                f"<div style='font-weight:600;font-size:0.9rem;line-height:1.9rem;"
+                f"white-space:nowrap;min-width:1.5rem;'>{display_name}</div>",
+                unsafe_allow_html=True,
+            )
+
+        # Label nudge buttons
+        with lu:
+            if st.button("↑", key="nl_u"):
+                _nudge_label(0, step)
+                st.rerun()
+        with ll:
+            if st.button("←", key="nl_l"):
+                _nudge_label(-step, 0)
+                st.rerun()
+        with lo:
+            if st.button("○", key="nl_reset", help="Reset label position"):
+                capture_fn()
+                if ann["type"] == "builtin":
+                    core.label_manager.custom_positions.pop(ann["key"], None)
+                else:
+                    dim = core.standalone_dim_lines[ann["idx"]]
+                    dim["label_x"] = None
+                    dim["label_y"] = None
+                st.rerun()
+        with lr:
+            if st.button("→", key="nl_r"):
+                _nudge_label(step, 0)
+                st.rerun()
+        with ld:
+            if st.button("↓", key="nl_d"):
+                _nudge_label(0, -step)
                 st.rerun()
 
-            # ── Label nudge arrows ──
-            st.caption("Label")
-            _nudge_label = _nudge_builtin if ann["type"] == "builtin" else _nudge_dl_label
-
-            _, uc, _ = st.columns(3)
-            with uc:
-                if st.button("↑", key="nl_u", use_container_width=True):
-                    _nudge_label(0, step)
+        if is_line:
+            with sep_c:
+                st.markdown(
+                    "<div style='text-align:center;line-height:1.9rem;color:#bbb;'>│</div>",
+                    unsafe_allow_html=True,
+                )
+            with llu:
+                if st.button("↑", key="line_u"):
+                    _nudge_dl_line(0, step)
                     st.rerun()
-            lc, cc, rc = st.columns(3)
-            with lc:
-                if st.button("←", key="nl_l", use_container_width=True):
-                    _nudge_label(-step, 0)
+            with lll:
+                if st.button("←", key="line_l"):
+                    _nudge_dl_line(-step, 0)
                     st.rerun()
-            with cc:
-                if st.button("○", key="nl_reset", use_container_width=True, help="Reset label"):
+            with llo:
+                if st.button("○", key="line_reset", help="Reset line position"):
                     capture_fn()
-                    if ann["type"] == "builtin":
-                        core.label_manager.custom_positions.pop(ann["key"], None)
-                    else:
-                        dim = core.standalone_dim_lines[ann["idx"]]
-                        dim["label_x"] = None
-                        dim["label_y"] = None
+                    dim = core.standalone_dim_lines[ann["idx"]]
+                    dim["user_dragged"] = False
+                    dim["label_x"] = None
+                    dim["label_y"] = None
                     st.rerun()
-            with rc:
-                if st.button("→", key="nl_r", use_container_width=True):
-                    _nudge_label(step, 0)
+            with llr:
+                if st.button("→", key="line_r"):
+                    _nudge_dl_line(step, 0)
                     st.rerun()
-            _, dc, _ = st.columns(3)
-            with dc:
-                if st.button("↓", key="nl_d", use_container_width=True):
-                    _nudge_label(0, -step)
+            with lld:
+                if st.button("↓", key="line_d"):
+                    _nudge_dl_line(0, -step)
                     st.rerun()
 
-            # ── Line nudge arrows (preset dim lines only) ──
-            if ann["type"] == "preset_dl":
-                st.caption("Line")
-                _, luc, _ = st.columns(3)
-                with luc:
-                    if st.button("↑", key="line_u", use_container_width=True):
-                        _nudge_dl_line(0, step)
-                        st.rerun()
-                llc, lcc, lrc = st.columns(3)
-                with llc:
-                    if st.button("←", key="line_l", use_container_width=True):
-                        _nudge_dl_line(-step, 0)
-                        st.rerun()
-                with lcc:
-                    if st.button("○", key="line_reset", use_container_width=True, help="Reset line"):
-                        capture_fn()
-                        dim = core.standalone_dim_lines[ann["idx"]]
-                        dim["user_dragged"] = False
-                        dim["label_x"] = None
-                        dim["label_y"] = None
-                        st.rerun()
-                with lrc:
-                    if st.button("→", key="line_r", use_container_width=True):
-                        _nudge_dl_line(step, 0)
-                        st.rerun()
-                _, ldc, _ = st.columns(3)
-                with ldc:
-                    if st.button("↓", key="line_d", use_container_width=True):
-                        _nudge_dl_line(0, -step)
-                        st.rerun()
+        with close_c:
+            if st.button("✕", key="btn_nudge_close"):
+                core.label_manager.builtin_selected = None
+                st.session_state.selected_annotation = None
+                st.session_state.last_click_pos = None
+                st.rerun()
 
 
 
@@ -704,7 +759,14 @@ with st.sidebar:
 
     # ── 3. Dimension Mode ──────────────────────────────────────────────────────
     if config and config.has_dimension_mode and shape != "Triangle":
-        st.subheader("Dimension Mode")
+        _dim_tip = (config.help_text or "Switch between Default (sliders) and Custom (manual parameters) mode.").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        st.markdown(
+            f'<p style="font-size:1.1rem;font-weight:600;margin:0.2rem 0 0.15rem;line-height:1.25;">'
+            f'Dimension Mode'
+            f'<span class="gf-tip">ⓘ<span class="gf-tip-box">{_dim_tip}</span></span>'
+            f'</p>',
+            unsafe_allow_html=True,
+        )
         dim_modes = ["Default", "Custom"]
         dim_idx = dim_modes.index(core.dimension_mode) if core.dimension_mode in dim_modes else 0
         new_dim_mode = st.radio(
@@ -726,25 +788,89 @@ with st.sidebar:
             )
             core.params = dict(zip(active_labels, defaults))
 
-        if config.help_text:
-            st.caption(config.help_text)
-
-    # ── 4. Shape Parameters — only shown in Custom mode (or no dimension mode) ──
-    _SHAPES_NO_PARAMS = {"Circle", "Square", "Polygon", "Sphere", "Hemisphere"}
-    _is_equilateral = (shape == "Triangle" and core.triangle_type == "Equilateral")
-    if config and not is_composite and shape not in _SHAPES_NO_PARAMS and not _is_equilateral:
-        # For shapes with a dimension mode, only show params in Custom mode.
-        # For shapes without a dimension mode, always show params.
-        show_params = (not config.has_dimension_mode) or (core.dimension_mode == "Custom")
-
-        if show_params:
-            if core.dimension_mode == "Custom" and config.custom_labels:
-                active_labels = config.custom_labels
-                default_vals = config.custom_values
-            else:
-                active_labels = config.labels
-                default_vals = config.default_values
-
+        if core.dimension_mode == "Default":
+            # Adjust Shape / Slope / Peak sliders shown in Default mode
+            if not is_composite:
+                slider_config = config
+                has_slider_shape = slider_config.has_feature(ShapeFeature.SLIDER_SHAPE)
+                has_slider_slope = slider_config.has_feature(ShapeFeature.SLIDER_SLOPE)
+                has_slider_peak = slider_config.has_feature(ShapeFeature.SLIDER_PEAK)
+                if has_slider_shape or has_slider_slope or has_slider_peak:
+                    st.subheader("Adjust Shape")
+                if has_slider_shape:
+                    spec = core.scale_manager.specs["aspect"]
+                    new_aspect = st.slider(
+                        "Adjust Shape",
+                        min_value=float(spec.min_val),
+                        max_value=float(spec.max_val),
+                        value=float(core.scale_manager.get("aspect")),
+                        step=0.01,
+                        key="sl_aspect",
+                    )
+                    if abs(new_aspect - core.scale_manager.get("aspect")) > 0.001:
+                        core.scale_manager.set("aspect", new_aspect)
+                if has_slider_slope:
+                    spec = core.scale_manager.specs["slope"]
+                    new_slope = st.slider(
+                        "Adjust Slope",
+                        min_value=float(spec.min_val),
+                        max_value=float(spec.max_val),
+                        value=float(core.scale_manager.get("slope")),
+                        step=0.01,
+                        key="sl_slope",
+                    )
+                    if abs(new_slope - core.scale_manager.get("slope")) > 0.001:
+                        core.scale_manager.set("slope", new_slope)
+                if has_slider_peak:
+                    spec = core.scale_manager.specs["peak_offset"]
+                    new_peak = st.slider(
+                        "Peak Offset",
+                        min_value=float(spec.min_val),
+                        max_value=float(spec.max_val),
+                        value=float(core.scale_manager.get("peak_offset")),
+                        step=0.01,
+                        key="sl_peak",
+                    )
+                    if abs(new_peak - core.scale_manager.get("peak_offset")) > 0.001:
+                        core.scale_manager.set("peak_offset", new_peak)
+        else:
+            # Custom mode: Parameters
+            _SHAPES_NO_PARAMS = {"Circle", "Square", "Polygon", "Sphere", "Hemisphere"}
+            _is_equilateral = (shape == "Triangle" and core.triangle_type == "Equilateral")
+            if not is_composite and shape not in _SHAPES_NO_PARAMS and not _is_equilateral:
+                if config.custom_labels:
+                    active_labels = config.custom_labels
+                    default_vals = config.custom_values
+                else:
+                    active_labels = config.labels
+                    default_vals = config.default_values
+                if active_labels:
+                    st.subheader("Parameters")
+                    params_changed = False
+                    for lbl, default_val in zip(active_labels, default_vals):
+                        current_val = core.params.get(lbl, default_val)
+                        pl, pi = st.columns([2, 1])
+                        with pl:
+                            st.write(lbl)
+                        with pi:
+                            new_val = st.text_input(
+                                lbl,
+                                value=current_val,
+                                key=f"param_{shape}_{core.triangle_type}_{core.dimension_mode}_{lbl}",
+                                label_visibility="collapsed",
+                            )
+                        if new_val != current_val:
+                            params_changed = True
+                            core.params[lbl] = new_val
+                    if params_changed:
+                        capture_state()
+    else:
+        # Shapes without dimension mode: params and sliders shown unconditionally
+        _SHAPES_NO_PARAMS = {"Circle", "Square", "Polygon", "Sphere", "Hemisphere"}
+        _is_equilateral = (shape == "Triangle" and core.triangle_type == "Equilateral")
+        if config and not is_composite and shape not in _SHAPES_NO_PARAMS and not _is_equilateral:
+            active_labels = config.labels
+            default_vals = config.default_values
             if active_labels:
                 st.subheader("Parameters")
                 params_changed = False
@@ -765,61 +891,133 @@ with st.sidebar:
                         core.params[lbl] = new_val
                 if params_changed:
                     capture_state()
+        if config and not is_composite and shape:
+            slider_config = config
+            has_slider_shape = slider_config.has_feature(ShapeFeature.SLIDER_SHAPE)
+            has_slider_slope = slider_config.has_feature(ShapeFeature.SLIDER_SLOPE)
+            has_slider_peak = slider_config.has_feature(ShapeFeature.SLIDER_PEAK)
+            if has_slider_shape or has_slider_slope or has_slider_peak:
+                st.subheader("Adjust Shape")
+            if has_slider_shape:
+                spec = core.scale_manager.specs["aspect"]
+                new_aspect = st.slider(
+                    "Adjust Shape",
+                    min_value=float(spec.min_val),
+                    max_value=float(spec.max_val),
+                    value=float(core.scale_manager.get("aspect")),
+                    step=0.01,
+                    key="sl_aspect",
+                )
+                if abs(new_aspect - core.scale_manager.get("aspect")) > 0.001:
+                    core.scale_manager.set("aspect", new_aspect)
+            if has_slider_slope:
+                spec = core.scale_manager.specs["slope"]
+                new_slope = st.slider(
+                    "Adjust Slope",
+                    min_value=float(spec.min_val),
+                    max_value=float(spec.max_val),
+                    value=float(core.scale_manager.get("slope")),
+                    step=0.01,
+                    key="sl_slope",
+                )
+                if abs(new_slope - core.scale_manager.get("slope")) > 0.001:
+                    core.scale_manager.set("slope", new_slope)
+            if has_slider_peak:
+                spec = core.scale_manager.specs["peak_offset"]
+                new_peak = st.slider(
+                    "Peak Offset",
+                    min_value=float(spec.min_val),
+                    max_value=float(spec.max_val),
+                    value=float(core.scale_manager.get("peak_offset")),
+                    step=0.01,
+                    key="sl_peak",
+                )
+                if abs(new_peak - core.scale_manager.get("peak_offset")) > 0.001:
+                    core.scale_manager.set("peak_offset", new_peak)
 
-    # ── 5. Sliders — Adjust Shape/Slope/Peak only in Default mode ──────────────
+    # ── 4. Dimension Lines & Labels ────────────────────────────────────────────
+    st.divider()
+    _dl_tip = "Check boxes to show dimension labels on the drawing. Click any visible label to select it, then nudge its position with the arrow toolbar."
+    st.markdown(
+        f'<p style="font-size:1.1rem;font-weight:600;margin:0.2rem 0 0.15rem;line-height:1.25;">'
+        f'Dimension Lines'
+        f'<span class="gf-tip">ⓘ<span class="gf-tip-box">{_dl_tip}</span></span>'
+        f'</p>',
+        unsafe_allow_html=True,
+    )
+
+    if shape and not is_composite:
+        preset_specs = _get_preset_dim_lines(shape, core.triangle_type)
+        relevant_toggles = _get_relevant_toggle_keys(shape, config) if config else []
+
+        if preset_specs:
+            _render_preset_dim_lines(core, shape, capture_state)
+
+        for lbl_key, st_key in relevant_toggles:
+            stored_text = core.label_manager.label_texts.get(lbl_key, "")
+            short_default = _TOGGLE_LABEL_DEFAULTS.get(lbl_key, lbl_key)
+            cur_text = stored_text if stored_text else short_default
+            cur_vis = core.label_manager.label_visibility.get(lbl_key, False)
+
+            tc, ti = st.columns([2, 1])
+            with tc:
+                new_vis = st.checkbox(lbl_key, value=cur_vis,
+                                      key=f"toggle_vis_{st_key}")
+            with ti:
+                new_text = st.text_input(
+                    lbl_key,
+                    value=cur_text,
+                    key=f"toggle_text_{st_key}",
+                    label_visibility="collapsed",
+                    placeholder=short_default,
+                )
+
+            if new_vis != cur_vis or new_text != cur_text:
+                capture_state()
+                display_text = new_text.strip() if new_text.strip() else short_default
+                if new_vis or new_text.strip():
+                    core.label_manager.set_label_text(lbl_key, display_text, new_vis)
+                else:
+                    core.label_manager.label_texts.pop(lbl_key, None)
+                    core.label_manager.label_visibility.pop(lbl_key, None)
+
+    fa_col, fb_col = st.columns([1, 1])
+    with fa_col:
+        new_font_size = st.slider(
+            "Font Size",
+            min_value=AppConstants.MIN_FONT_SIZE,
+            max_value=AppConstants.MAX_FONT_SIZE,
+            value=core.font_size,
+            step=1,
+            key="sl_font_size",
+        )
+        if new_font_size != core.font_size:
+            core.font_size = new_font_size
+    with fb_col:
+        font_families = ["serif", "sans-serif", "monospace"]
+        ff_idx = (
+            font_families.index(core.font_family)
+            if core.font_family in font_families else 0
+        )
+        new_ff = st.selectbox(
+            "Font Family", font_families, index=ff_idx, key="sb_font_family"
+        )
+        if new_ff != core.font_family:
+            core.font_family = new_ff
+
+    new_lw = st.slider(
+        "Line Width",
+        min_value=AppConstants.MIN_LINE_WIDTH,
+        max_value=AppConstants.MAX_LINE_WIDTH,
+        value=core.line_width,
+        step=1,
+        key="sl_line_width",
+    )
+    if new_lw != core.line_width:
+        core.line_width = new_lw
+
+    # View scale only for non-2D/3D categories
     if config and not is_composite and shape:
-        slider_config = config  # already triangle sub-config if applicable
-
-        has_slider_shape = slider_config.has_feature(ShapeFeature.SLIDER_SHAPE)
-        has_slider_slope = slider_config.has_feature(ShapeFeature.SLIDER_SLOPE)
-        has_slider_peak = slider_config.has_feature(ShapeFeature.SLIDER_PEAK)
-
-        # Only show adjust sliders in Default mode (or shapes without dimension mode)
-        show_adjust = (not config.has_dimension_mode) or (core.dimension_mode == "Default")
-
-        if show_adjust and (has_slider_shape or has_slider_slope or has_slider_peak):
-            st.subheader("Adjust Shape")
-
-        if show_adjust and has_slider_shape:
-            spec = core.scale_manager.specs["aspect"]
-            new_aspect = st.slider(
-                "Adjust Shape",
-                min_value=float(spec.min_val),
-                max_value=float(spec.max_val),
-                value=float(core.scale_manager.get("aspect")),
-                step=0.01,
-                key="sl_aspect",
-            )
-            if abs(new_aspect - core.scale_manager.get("aspect")) > 0.001:
-                core.scale_manager.set("aspect", new_aspect)
-
-        if show_adjust and has_slider_slope:
-            spec = core.scale_manager.specs["slope"]
-            new_slope = st.slider(
-                "Adjust Slope",
-                min_value=float(spec.min_val),
-                max_value=float(spec.max_val),
-                value=float(core.scale_manager.get("slope")),
-                step=0.01,
-                key="sl_slope",
-            )
-            if abs(new_slope - core.scale_manager.get("slope")) > 0.001:
-                core.scale_manager.set("slope", new_slope)
-
-        if show_adjust and has_slider_peak:
-            spec = core.scale_manager.specs["peak_offset"]
-            new_peak = st.slider(
-                "Peak Offset",
-                min_value=float(spec.min_val),
-                max_value=float(spec.max_val),
-                value=float(core.scale_manager.get("peak_offset")),
-                step=0.01,
-                key="sl_peak",
-            )
-            if abs(new_peak - core.scale_manager.get("peak_offset")) > 0.001:
-                core.scale_manager.set("peak_offset", new_peak)
-
-        # View scale only for non-2D/3D categories
         if core.category not in ("2D Figures", "3D Solids"):
             spec_vs = core.scale_manager.specs["view_scale"]
             new_view = st.slider(
@@ -882,47 +1080,6 @@ with st.sidebar:
             core.transform_controller.reset()
             st.rerun()
 
-    # ── 7. Dimension Lines & Labels (merged) ───────────────────────────────────
-    if shape and not is_composite:
-        preset_specs = _get_preset_dim_lines(shape, core.triangle_type)
-        relevant_toggles = _get_relevant_toggle_keys(shape, config) if config else []
-        if preset_specs or relevant_toggles:
-            st.divider()
-            st.subheader("Dimension Lines")
-
-        # Preset dim lines (dashed measurement lines on the canvas)
-        if preset_specs:
-            _render_preset_dim_lines(core, shape, capture_state)
-
-        # Label toggles (arcs, built-in dim lines drawn by the shape itself)
-        for lbl_key, st_key in relevant_toggles:
-            stored_text = core.label_manager.label_texts.get(lbl_key, "")
-            short_default = _TOGGLE_LABEL_DEFAULTS.get(lbl_key, lbl_key)
-            cur_text = stored_text if stored_text else short_default
-            cur_vis = core.label_manager.label_visibility.get(lbl_key, False)
-
-            tc, ti = st.columns([2, 1])
-            with tc:
-                new_vis = st.checkbox(lbl_key, value=cur_vis,
-                                      key=f"toggle_vis_{st_key}")
-            with ti:
-                new_text = st.text_input(
-                    lbl_key,
-                    value=cur_text,
-                    key=f"toggle_text_{st_key}",
-                    label_visibility="collapsed",
-                    placeholder=short_default,
-                )
-
-            if new_vis != cur_vis or new_text != cur_text:
-                capture_state()
-                display_text = new_text.strip() if new_text.strip() else short_default
-                if new_vis or new_text.strip():
-                    core.label_manager.set_label_text(lbl_key, display_text, new_vis)
-                else:
-                    core.label_manager.label_texts.pop(lbl_key, None)
-                    core.label_manager.label_visibility.pop(lbl_key, None)
-
     # ── 9. Hash Marks (Polygon only) ──────────────────────────────────────────
     if config and config.has_feature(ShapeFeature.HASH_MARKS):
         st.subheader("Options")
@@ -936,45 +1093,6 @@ with st.sidebar:
     # ── 10. Composite Shape Controls ────────────────────────────────────────────
     if is_composite:
         _render_composite_controls(core, shape, capture_state)
-
-    # ── 11. Appearance ─────────────────────────────────────────────────────────
-    st.divider()
-    st.subheader("Appearance")
-
-    fa_col, fb_col = st.columns([1, 1])
-    with fa_col:
-        new_font_size = st.slider(
-            "Font Size",
-            min_value=AppConstants.MIN_FONT_SIZE,
-            max_value=AppConstants.MAX_FONT_SIZE,
-            value=core.font_size,
-            step=1,
-            key="sl_font_size",
-        )
-        if new_font_size != core.font_size:
-            core.font_size = new_font_size
-    with fb_col:
-        font_families = ["serif", "sans-serif", "monospace"]
-        ff_idx = (
-            font_families.index(core.font_family)
-            if core.font_family in font_families else 0
-        )
-        new_ff = st.selectbox(
-            "Font Family", font_families, index=ff_idx, key="sb_font_family"
-        )
-        if new_ff != core.font_family:
-            core.font_family = new_ff
-
-    new_lw = st.slider(
-        "Line Width",
-        min_value=AppConstants.MIN_LINE_WIDTH,
-        max_value=AppConstants.MAX_LINE_WIDTH,
-        value=core.line_width,
-        step=1,
-        key="sl_line_width",
-    )
-    if new_lw != core.line_width:
-        core.line_width = new_lw
 
     # ── 13. Actions ────────────────────────────────────────────────────────────
     st.divider()
@@ -1037,14 +1155,24 @@ fig.savefig(buf, format="png", dpi=CANVAS_DPI)
 buf.seek(0)
 pil_img = _PILImage.open(buf)
 
+pil_img.load()  # force full decode so buf can be safely GC'd
 coords = streamlit_image_coordinates(pil_img, key="canvas_click", use_column_width=True)
 if coords and ax:
-    pos = _pixel_to_data(coords["x"], coords["y"], fig, ax)
-    if pos is not None and pos != st.session_state.last_click_pos:
-        st.session_state.last_click_pos = pos
+    # streamlit_image_coordinates returns display-space pixel coords;
+    # coords["width"] / coords["height"] are the rendered display dimensions.
+    pos = _pixel_to_data(coords["x"], coords["y"], fig, ax,
+                         img_w=coords["width"], img_h=coords["height"])
+    # Round for stable comparison; clicking the same pixel twice is intentionally ignored
+    pos_r = (round(pos[0], 3), round(pos[1], 3)) if pos else None
+    if pos_r is not None and pos_r != st.session_state.last_click_pos:
+        st.session_state.last_click_pos = pos_r
         ann = _find_nearest_label(pos[0], pos[1], ax)
         prev_ann = st.session_state.selected_annotation
         core.label_manager.builtin_selected = ann["key"] if ann and ann["type"] == "builtin" else None
         st.session_state.selected_annotation = ann
         if ann != prev_ann:
             st.rerun()
+
+# Nudge toolbar appears below the canvas
+if ax:
+    _render_nudge_panel(fig, ax, capture_state)
