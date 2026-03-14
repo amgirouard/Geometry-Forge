@@ -1145,6 +1145,10 @@ with st.sidebar:
 fig = core.generate_figure()
 ax = fig.axes[0] if fig.axes else None
 
+# Nudge panel appears above the canvas, positioned under the selected label
+if ax:
+    _render_nudge_panel(fig, ax, capture_state)
+
 # Render to PIL Image for click-capture component (BytesIO not accepted)
 buf = io.BytesIO()
 fig.savefig(buf, format="png", dpi=CANVAS_DPI)
