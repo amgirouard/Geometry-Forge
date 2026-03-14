@@ -426,7 +426,6 @@ class GeometryCore:
             aspect_ratio=self.scale_manager.get("aspect")
         )
         ctx.show_hashmarks = self.show_hashmarks
-        self.label_manager.builtin_selected = None  # no canvas selection in Streamlit
         transform = self._create_transform_state()
         params = self._collect_shape_params()
         self._apply_transform_pipeline(ctx, shape, transform, params)
@@ -440,6 +439,22 @@ class GeometryCore:
             "y_min": self.ax.get_ylim()[0],
             "y_max": self.ax.get_ylim()[1],
         }
+        # Expand view bounds to include any standalone dim line positions so
+        # that nudged dim lines are never clipped at the shape boundary.
+        if self.standalone_dim_lines:
+            all_x = [self._shape_bounds["x_min"], self._shape_bounds["x_max"]]
+            all_y = [self._shape_bounds["y_min"], self._shape_bounds["y_max"]]
+            for dim in self.standalone_dim_lines:
+                all_x += [dim["x1"], dim["x2"]]
+                all_y += [dim["y1"], dim["y2"]]
+                if dim.get("label_x") is not None:
+                    all_x.append(dim["label_x"])
+                if dim.get("label_y") is not None:
+                    all_y.append(dim["label_y"])
+            self._shape_bounds = {
+                "x_min": min(all_x), "x_max": max(all_x),
+                "y_min": min(all_y), "y_max": max(all_y),
+            }
         self._apply_view_scale()
         self._draw_builtin_dim_lines()
         self._draw_standalone_labels()
@@ -507,8 +522,8 @@ class GeometryCore:
             shape_center_y = (ylim[0] + ylim[1]) / 2
 
         pixel_aspect = self._axes_pixel_aspect
-        margin_x = shape_width  * 0.12
-        margin_y = shape_height * 0.12
+        margin_x = shape_width  * 0.06
+        margin_y = shape_height * 0.06
         content_width  = shape_width  + 2 * margin_x
         content_height = shape_height + 2 * margin_y
 
